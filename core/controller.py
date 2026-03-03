@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 from typing import Optional
-from core.state_machine import StateMachine, State
+from core.state_machine import StateMachine, State, InvalidTransitionError
 from core.snapshot import SnapshotManager
 from tools.smart_validator import SmartValidator
 from tools.build_system_monitor import BuildSystemMonitor
@@ -668,7 +668,7 @@ class Controller:
     
     def _apply_mutations(self, staged_writes: dict, context: TransactionContext) -> tuple:
         """
-        Apply all writes atomically and commit candidates to modified_files
+        Apply all writes atomically with transactional database indexing
         
         Args:
             staged_writes: Dict of file -> new content
@@ -683,27 +683,42 @@ class Controller:
             details={"files": list(staged_writes.keys())}
         )
         
-        for file_path, content in staged_writes.items():
-            try:
-                # Check if this is a CREATE_FILE operation
-                baseline = context.get_baseline(file_path)
-                is_new_file = baseline and baseline.get("hash") == ""
-                
-                if is_new_file:
-                    # Use create_file for new files
-                    self.dispatcher.create_file(file_path, content, allow_tier1=True)
-                else:
-                    # Use overwrite_file for existing files
-                    self.dispatcher.overwrite_file(file_path, content, allow_tier1=True)
-            except Exception as e:
-                # Clear candidates on write failure
-                context.clear_candidates()
-                return False, f"Write failed for {file_path}: {e}"
+        # Begin database transaction BEFORE file writes
+        db_savepoint = self.indexer.begin_transaction()
         
-        # All writes succeeded - commit candidates to modified_files
-        context.commit_candidates()
-        
-        return True, ""
+        try:
+            # Apply file writes
+            for file_path, content in staged_writes.items():
+                try:
+                    # Check if this is a CREATE_FILE operation
+                    baseline = context.get_baseline(file_path)
+                    is_new_file = baseline and baseline.get("hash") == ""
+                    
+                    if is_new_file:
+                        # Use create_file for new files
+                        self.dispatcher.create_file(file_path, content, allow_tier1=True)
+                    else:
+                        # Use overwrite_file for existing files
+                        self.dispatcher.overwrite_file(file_path, content, allow_tier1=True)
+                except Exception as e:
+                    # Rollback database transaction on file write failure
+                    self.indexer.rollback_transaction(db_savepoint)
+                    context.clear_candidates()
+                    return False, f"Write failed for {file_path}: {e}"
+            
+            # All file writes succeeded - commit database transaction
+            self.indexer.commit_transaction(db_savepoint)
+            
+            # Commit candidates to modified_files
+            context.commit_candidates()
+            
+            return True, ""
+            
+        except Exception as e:
+            # Rollback database on any error
+            self.indexer.rollback_transaction(db_savepoint)
+            context.clear_candidates()
+            return False, f"Mutation failed: {e}"
     
     def _validate_post_build(self, context: TransactionContext) -> tuple:
         """
@@ -733,95 +748,113 @@ class Controller:
                 }
             )
         
-        # Reindex modified files
-        self.indexer.reindex_files(modified_files)
+        # Begin database transaction for reindexing
+        db_savepoint = self.indexer.begin_transaction()
         
-        # File-level dependency validation (cross-file aware)
-        is_valid, issues = self.dependency_validator.validate_module_integrity(modified_files)
-        if not is_valid:
-            return False, f"Module integrity check failed: {'; '.join(issues)}"
-        
-        # Symbol-level validation (cross-file symbol resolution)
-        symbol_issues = []
-        if self.symbol_validation_enabled:
-            symbol_valid, symbol_issues = self.symbol_validator.validate_symbol_usage(
-                modified_files,
-                check_undefined=True,
-                check_unused=False
-            )
+        try:
+            # Reindex modified files within transaction
+            self.indexer.reindex_files(modified_files)
             
-            if not symbol_valid:
-                # Log cross-file symbol issues
-                if len(modified_files) > 1:
+            # File-level dependency validation (cross-file aware)
+            is_valid, issues = self.dependency_validator.validate_module_integrity(modified_files)
+            if not is_valid:
+                # Rollback index changes
+                self.indexer.rollback_transaction(db_savepoint)
+                return False, f"Module integrity check failed: {'; '.join(issues)}"
+            
+            # Symbol-level validation (cross-file symbol resolution)
+            symbol_issues = []
+            if self.symbol_validation_enabled:
+                symbol_valid, symbol_issues = self.symbol_validator.validate_symbol_usage(
+                    modified_files,
+                    check_undefined=True,
+                    check_unused=False
+                )
+                
+                if not symbol_valid:
+                    # Rollback index changes
+                    self.indexer.rollback_transaction(db_savepoint)
+                    # Log cross-file symbol issues
+                    if len(modified_files) > 1:
+                        self.logger.log_event(
+                            state=self.state_machine.get_state().name,
+                            event="CROSS_FILE_SYMBOL_VALIDATION_FAILED",
+                            details={
+                                "files": list(modified_files),
+                                "issues": symbol_issues
+                            }
+                        )
+                    return False, f"Symbol validation failed: {'; '.join(symbol_issues)}"
+                
+                # Log symbol warnings
+                warnings = [issue for issue in symbol_issues if issue.startswith("Warning:")]
+                if warnings:
                     self.logger.log_event(
                         state=self.state_machine.get_state().name,
-                        event="CROSS_FILE_SYMBOL_VALIDATION_FAILED",
-                        details={
-                            "files": list(modified_files),
-                            "issues": symbol_issues
-                        }
+                        event="SYMBOL_VALIDATION_WARNINGS",
+                        details={"warnings": warnings}
                     )
-                return False, f"Symbol validation failed: {'; '.join(symbol_issues)}"
             
-            # Log symbol warnings
-            warnings = [issue for issue in symbol_issues if issue.startswith("Warning:")]
-            if warnings:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="SYMBOL_VALIDATION_WARNINGS",
-                    details={"warnings": warnings}
+            # Call graph integrity validation (cross-file call relationships)
+            graph_issues = []
+            if self.call_graph_validation_enabled:
+                graph_valid, graph_issues = self.call_graph_analyzer.validate_call_graph_integrity(
+                    modified_files,
+                    check_dead_code=False,
+                    check_recursion=True,
+                    check_unreachable=False
                 )
-        
-        # Call graph integrity validation (cross-file call relationships)
-        graph_issues = []
-        if self.call_graph_validation_enabled:
-            graph_valid, graph_issues = self.call_graph_analyzer.validate_call_graph_integrity(
-                modified_files,
-                check_dead_code=False,
-                check_recursion=True,
-                check_unreachable=False
-            )
-            
-            if not graph_valid:
-                # Log cross-file call graph issues
-                if len(modified_files) > 1:
+                
+                if not graph_valid:
+                    # Rollback index changes
+                    self.indexer.rollback_transaction(db_savepoint)
+                    # Log cross-file call graph issues
+                    if len(modified_files) > 1:
+                        self.logger.log_event(
+                            state=self.state_machine.get_state().name,
+                            event="CROSS_FILE_CALL_GRAPH_FAILED",
+                            details={
+                                "files": list(modified_files),
+                                "issues": graph_issues
+                            }
+                        )
+                    return False, f"Call graph validation failed: {'; '.join(graph_issues)}"
+                
+                # Log call graph warnings
+                graph_warnings = [issue for issue in graph_issues if issue.startswith("Warning:")]
+                if graph_warnings:
                     self.logger.log_event(
                         state=self.state_machine.get_state().name,
-                        event="CROSS_FILE_CALL_GRAPH_FAILED",
-                        details={
-                            "files": list(modified_files),
-                            "issues": graph_issues
-                        }
+                        event="CALL_GRAPH_WARNINGS",
+                        details={"warnings": graph_warnings}
                     )
-                return False, f"Call graph validation failed: {'; '.join(graph_issues)}"
             
-            # Log call graph warnings
-            graph_warnings = [issue for issue in graph_issues if issue.startswith("Warning:")]
-            if graph_warnings:
+            # Log successful cross-file validation
+            if len(modified_files) > 1:
                 self.logger.log_event(
                     state=self.state_machine.get_state().name,
-                    event="CALL_GRAPH_WARNINGS",
-                    details={"warnings": graph_warnings}
+                    event="CROSS_FILE_VALIDATION_PASSED",
+                    details={
+                        "files": list(modified_files),
+                        "file_count": len(modified_files)
+                    }
                 )
-        
-        # Log successful cross-file validation
-        if len(modified_files) > 1:
+            
             self.logger.log_event(
                 state=self.state_machine.get_state().name,
-                event="CROSS_FILE_VALIDATION_PASSED",
-                details={
-                    "files": list(modified_files),
-                    "file_count": len(modified_files)
-                }
+                event="MODULE_INTEGRITY_PASSED",
+                details={"modified_files": list(modified_files)}
             )
-        
-        self.logger.log_event(
-            state=self.state_machine.get_state().name,
-            event="MODULE_INTEGRITY_PASSED",
-            details={"modified_files": list(modified_files)}
-        )
-        
-        return True, ""
+            
+            # All validations passed - commit database transaction
+            self.indexer.commit_transaction(db_savepoint)
+            
+            return True, ""
+            
+        except Exception as e:
+            # Rollback database on any validation error
+            self.indexer.rollback_transaction(db_savepoint)
+            return False, f"Validation failed: {e}"
     
     def _handle_commit(self, context: TransactionContext) -> str:
         """
@@ -973,11 +1006,12 @@ class Controller:
             if not approved:
                 self.logger.log_event(
                     state=self.state_machine.get_state().name,
-                    event="CRITIC_REJECTED",
+                    event="CRITIC_REJECTED_ABORT",
                     details={"reason": feedback}
                 )
-                # For now, continue anyway (critic is advisory)
-                # Future: Could abort or request refinement
+                # Critic rejection is MANDATORY - abort transaction
+                self._sync_state_from_context(context)
+                return self._handle_abort(f"Critic rejected intent: {feedback}")
             
             # PATCH READY
             self.state_machine.transition_to(State.PATCH_READY)
@@ -1285,7 +1319,25 @@ class Controller:
                     self.snapshot_manager.rollback()
                     self.indexer.index_project()
                     self.snapshot_manager.cleanup_snapshot()
-            finally:
+                # Proper state transition instead of bypass
+                try:
+                    self.state_machine.transition_to(State.ABORT)
+                    self.state_machine.transition_to(State.IDLE)
+                except InvalidTransitionError as te:
+                    self.logger.log_event(
+                        state="EXCEPTION_RECOVERY",
+                        event="STATE_TRANSITION_ERROR",
+                        details={"error": str(te)}
+                    )
+                    # Force reset only as last resort
+                    self.state_machine.current_state = State.IDLE
+            except Exception as cleanup_error:
+                self.logger.log_event(
+                    state="EXCEPTION_RECOVERY",
+                    event="CLEANUP_FAILED",
+                    details={"error": str(cleanup_error)}
+                )
+                # Force reset
                 self.state_machine.current_state = State.IDLE
 
             raise
@@ -1330,7 +1382,25 @@ class Controller:
                     self.snapshot_manager.rollback()
                     self.indexer.index_project()
                     self.snapshot_manager.cleanup_snapshot()
-            finally:
+                # Proper state transition instead of bypass
+                try:
+                    self.state_machine.transition_to(State.ABORT)
+                    self.state_machine.transition_to(State.IDLE)
+                except InvalidTransitionError as te:
+                    self.logger.log_event(
+                        state="EXCEPTION_RECOVERY",
+                        event="STATE_TRANSITION_ERROR",
+                        details={"error": str(te)}
+                    )
+                    # Force reset only as last resort
+                    self.state_machine.current_state = State.IDLE
+            except Exception as cleanup_error:
+                self.logger.log_event(
+                    state="EXCEPTION_RECOVERY",
+                    event="CLEANUP_FAILED",
+                    details={"error": str(cleanup_error)}
+                )
+                # Force reset
                 self.state_machine.current_state = State.IDLE
 
             raise

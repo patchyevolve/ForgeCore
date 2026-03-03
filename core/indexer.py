@@ -19,6 +19,33 @@ class ProjectIndexer:
         self.project_root = os.path.abspath(project_root)
         self.db = ForgeDatabase()
         self.conn = self.db.get_connection()
+        self._transaction_depth = 0
+    
+    def begin_transaction(self):
+        """Begin a database transaction with savepoint support"""
+        self._transaction_depth += 1
+        savepoint_name = f"sp_{self._transaction_depth}"
+        self.conn.execute(f"SAVEPOINT {savepoint_name}")
+        return savepoint_name
+    
+    def commit_transaction(self, savepoint_name=None):
+        """Commit a database transaction"""
+        if savepoint_name:
+            self.conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        else:
+            self.conn.commit()
+        if self._transaction_depth > 0:
+            self._transaction_depth -= 1
+    
+    def rollback_transaction(self, savepoint_name=None):
+        """Rollback a database transaction"""
+        if savepoint_name:
+            self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            self.conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        else:
+            self.conn.rollback()
+        if self._transaction_depth > 0:
+            self._transaction_depth -= 1
 
     def index_project(self):
         self._clear_existing_data()
