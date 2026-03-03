@@ -1,0 +1,16 @@
+{
+  "tier0": [
+    "engine/physics/",
+    "engine/internal/",
+    "network/utils/"
+  ],
+  "tier1": [
+    "engine/public/",
+    "engine/math/",
+    "network/core/"
+  ],
+  "tier2": [
+    "crypto/",
+    "network/protocol/"
+  ]
+}

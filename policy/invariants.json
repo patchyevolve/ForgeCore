@@ -1,0 +1,30 @@
+{
+  "execution": {
+    "max_iterations": 5,
+    "max_files_per_patch": 5,
+    "max_lines_per_file": 200,
+    "rewrite_ratio_threshold": 0.5,
+    "stagnation_detection_enabled": true
+  },
+  "validation": {
+    "file_integrity_guard_enabled": true,
+    "tier_enforcement_enabled": true,
+    "module_integrity_check_enabled": true,
+    "symbol_validation_enabled": true,
+    "call_graph_validation_enabled": true,
+    "path_traversal_check_enabled": true
+  },
+  "safety": {
+    "snapshot_before_mutation": true,
+    "rollback_on_failure": true,
+    "atomic_multi_file_commits": true,
+    "baseline_tracking_enabled": true
+  },
+  "logging": {
+    "log_all_events": true,
+    "log_intent_fingerprints": true,
+    "log_validation_failures": true,
+    "log_stagnation_detection": true
+  },
+  "description": "System invariants and safety constraints for ForgeCore mutation engine"
+}
