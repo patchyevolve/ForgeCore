@@ -10,9 +10,10 @@
     "file_integrity_guard_enabled": true,
     "tier_enforcement_enabled": true,
     "module_integrity_check_enabled": true,
-    "symbol_validation_enabled": true,
-    "call_graph_validation_enabled": true,
-    "path_traversal_check_enabled": true
+    "symbol_validation_enabled": false,
+    "call_graph_validation_enabled": false,
+    "path_traversal_check_enabled": true,
+    "semantic_validation_enabled": true
   },
   "safety": {
     "snapshot_before_mutation": true,

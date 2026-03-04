@@ -27,6 +27,8 @@ def run_test(test_file):
         # Set PYTHONPATH to include parent directory
         env = os.environ.copy()
         env['PYTHONPATH'] = PARENT_DIR + os.pathsep + env.get('PYTHONPATH', '')
+        # Disable LLM for tests to speed them up
+        env['FORGECORE_USE_LLM'] = 'false'
         
         result = subprocess.run(
             [sys.executable, test_path],

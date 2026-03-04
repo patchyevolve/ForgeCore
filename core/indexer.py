@@ -62,7 +62,9 @@ class ProjectIndexer:
                     full_path = os.path.join(root, file)
                     relative_path = os.path.relpath(full_path, self.project_root)
                     self._index_file(relative_path,full_path)
-        self.conn.commit()
+        # Only commit if not in a transaction
+        if self._transaction_depth == 0:
+            self.conn.commit()
 
     def _clear_existing_data(self):
         cursor = self.conn.cursor()
@@ -71,7 +73,9 @@ class ProjectIndexer:
         cursor.execute("DELETE FROM symbols")
         cursor.execute("DELETE FROM dependencies")
         print("Cleared existing index data")
-        self.conn.commit()
+        # Only commit if not in a transaction
+        if self._transaction_depth == 0:
+            self.conn.commit()
 
     def _index_file(self, relative_path, full_path):
         cursor = self.conn.cursor()
@@ -165,7 +169,9 @@ class ProjectIndexer:
 
             if os.path.exists(full_path):
                 self._index_file(relative_path, full_path)
-        self.conn.commit()
+        # Only commit if not in a transaction
+        if self._transaction_depth == 0:
+            self.conn.commit()
 
     def close(self):
         self.db.close()

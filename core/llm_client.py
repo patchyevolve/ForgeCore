@@ -4,8 +4,14 @@ LLM Client - Interface to Ollama for local LLM inference
 
 import json
 import ollama
+import threading
 from typing import Dict, Any, Optional
 from json_repair import repair_json
+
+
+class TimeoutError(Exception):
+    """Raised when LLM call times out"""
+    pass
 
 
 class LLMClient:
@@ -28,7 +34,7 @@ class LLMClient:
     
     def generate(self, prompt: str, system: str = None) -> str:
         """
-        Generate text from prompt.
+        Generate text from prompt with timeout.
         
         Args:
             prompt: User prompt
@@ -36,6 +42,10 @@ class LLMClient:
             
         Returns:
             Generated text
+            
+        Raises:
+            TimeoutError: If generation exceeds timeout
+            RuntimeError: If generation fails
         """
         messages = []
         
@@ -50,20 +60,36 @@ class LLMClient:
             'content': prompt
         })
         
-        try:
-            response = ollama.chat(
-                model=self.model,
-                messages=messages,
-                options={
-                    'temperature': self.temperature,
-                    'num_predict': 2048
-                }
-            )
-            
-            return response['message']['content']
+        # Use threading to implement timeout
+        result = {'response': None, 'error': None}
         
-        except Exception as e:
-            raise RuntimeError(f"LLM generation failed: {e}")
+        def _generate():
+            try:
+                response = ollama.chat(
+                    model=self.model,
+                    messages=messages,
+                    options={
+                        'temperature': self.temperature,
+                        'num_predict': 2048
+                    }
+                )
+                result['response'] = response['message']['content']
+            except Exception as e:
+                result['error'] = e
+        
+        thread = threading.Thread(target=_generate)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=self.timeout)
+        
+        if thread.is_alive():
+            # Timeout occurred
+            raise TimeoutError(f"LLM generation timed out after {self.timeout}s")
+        
+        if result['error']:
+            raise RuntimeError(f"LLM generation failed: {result['error']}")
+        
+        return result['response']
     
     def generate_json(self, prompt: str, system: str = None) -> Dict[str, Any]:
         """

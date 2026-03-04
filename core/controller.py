@@ -56,6 +56,7 @@ class Controller:
         self.symbol_validation_enabled = invariants["validation"]["symbol_validation_enabled"]
         self.call_graph_validation_enabled = invariants["validation"]["call_graph_validation_enabled"]
         self.path_traversal_check_enabled = invariants["validation"]["path_traversal_check_enabled"]
+        self.semantic_validation_enabled = invariants["validation"].get("semantic_validation_enabled", False)
         
         # Safety flags
         self.snapshot_before_mutation = invariants["safety"]["snapshot_before_mutation"]
@@ -109,12 +110,18 @@ class Controller:
         # Initialize call graph analyzer
         self.call_graph_analyzer = CallGraphAnalyzer(self.symbol_validator)
         
+        # Initialize semantic validator
+        from core.semantic_validator import SemanticValidator
+        self.semantic_validator = SemanticValidator(self.indexer, logger)
+        
         # Initialize planner
         self.planner = Planner(logger, self.indexer)
         
-        # Initialize critic
+        # Initialize critic (disable LLM for tests via env var)
+        import os
+        use_llm_critic = os.getenv('FORGECORE_USE_LLM', 'true').lower() == 'true'
         from core.critic import Critic
-        self.critic = Critic(use_llm=True)
+        self.critic = Critic(use_llm=use_llm_critic)
 
     def _compute_intent_fingerprint(self, intent: PatchIntent) -> str:
         """Compute deterministic hash of intent for stagnation detection"""
@@ -750,6 +757,7 @@ class Controller:
         
         # Begin database transaction for reindexing
         db_savepoint = self.indexer.begin_transaction()
+        rolled_back = False
         
         try:
             # Reindex modified files within transaction
@@ -760,6 +768,7 @@ class Controller:
             if not is_valid:
                 # Rollback index changes
                 self.indexer.rollback_transaction(db_savepoint)
+                rolled_back = True
                 return False, f"Module integrity check failed: {'; '.join(issues)}"
             
             # Symbol-level validation (cross-file symbol resolution)
@@ -774,6 +783,7 @@ class Controller:
                 if not symbol_valid:
                     # Rollback index changes
                     self.indexer.rollback_transaction(db_savepoint)
+                    rolled_back = True
                     # Log cross-file symbol issues
                     if len(modified_files) > 1:
                         self.logger.log_event(
@@ -808,6 +818,7 @@ class Controller:
                 if not graph_valid:
                     # Rollback index changes
                     self.indexer.rollback_transaction(db_savepoint)
+                    rolled_back = True
                     # Log cross-file call graph issues
                     if len(modified_files) > 1:
                         self.logger.log_event(
@@ -852,8 +863,9 @@ class Controller:
             return True, ""
             
         except Exception as e:
-            # Rollback database on any validation error
-            self.indexer.rollback_transaction(db_savepoint)
+            # Rollback database on any validation error (only if not already rolled back)
+            if not rolled_back:
+                self.indexer.rollback_transaction(db_savepoint)
             return False, f"Validation failed: {e}"
     
     def _handle_commit(self, context: TransactionContext) -> str:
@@ -1076,6 +1088,51 @@ class Controller:
             for file, content in staged_writes.items():
                 file_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
                 context.update_baseline(file, content, file_hash)
+            
+            # SEMANTIC VALIDATION (before build)
+            if self.semantic_validation_enabled:
+                self.logger.log_event(
+                    state=self.state_machine.get_state().name,
+                    event="SEMANTIC_VALIDATION_START",
+                    details={"files": list(staged_writes.keys())}
+                )
+                
+                # Run semantic validation on the staged writes
+                semantic_valid, semantic_issues = self.semantic_validator.validate(
+                    set(staged_writes.keys()),
+                    staged_writes
+                )
+                
+                # Log and display issues
+                if semantic_issues:
+                    errors = [i for i in semantic_issues if i.severity == "error"]
+                    warnings = [i for i in semantic_issues if i.severity == "warning"]
+                    
+                    if errors:
+                        print("\n[!] Semantic validation errors:")
+                        for error in errors:
+                            print(f"  {error.file}:{error.line} - {error.message}")
+                            if error.suggestion:
+                                print(f"    Suggestion: {error.suggestion}")
+                    
+                    if warnings:
+                        print("\n[!] Semantic validation warnings:")
+                        for warning in warnings:
+                            print(f"  {warning.file}:{warning.line} - {warning.message}")
+                            if warning.suggestion:
+                                print(f"    Suggestion: {warning.suggestion}")
+                
+                # Fail if semantic errors found
+                if not semantic_valid:
+                    error_summary = f"{len([i for i in semantic_issues if i.severity == 'error'])} semantic error(s)"
+                    self.logger.log_event(
+                        state=self.state_machine.get_state().name,
+                        event="SEMANTIC_VALIDATION_FAILED",
+                        details={"error_summary": error_summary}
+                    )
+                    # Sync state before abort
+                    self._sync_state_from_context(context)
+                    return self._handle_abort(f"Semantic validation failed: {error_summary}")
             
             # COMPILING
             self.state_machine.transition_to(State.COMPILING)
