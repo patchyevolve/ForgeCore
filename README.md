@@ -33,6 +33,8 @@ cd ForgeCore
 pip install -r requirements.txt
 ```
 
+For detailed instructions on setting up and customizing local and remote LLM providers (Ollama, Groq, etc.), see the **[LLM Provider Guide](file:///d:/codeWorks/ForgeCore/LLM_PROVIDER_GUIDE.md)**.
+
 ### Usage
 
 #### Interactive Mode (Recommended)
@@ -75,46 +77,59 @@ python cli.py task "add a function to calculate fibonacci"
 ```
 ForgeCore/
 ├── core/                   # Core system
-│   ├── planner.py         # AI Planner (Qwen)
-│   ├── critic.py          # AI Critic (DeepSeek)
-│   ├── controller.py      # Execution engine
-│   ├── context_manager.py # Smart context handling
+│   ├── planner.py         # AI Planner (Qwen 2.5 Coder 7B)
+│   ├── critic.py          # AI Critic (DeepSeek Coder 6.7B)
+│   ├── controller.py      # Main execution engine
+│   ├── context_manager.py # Smart context & history management
+│   ├── indexer.py         # Project indexing (SQLite)
+│   ├── snapshot.py        # Rollback & backup system
 │   └── ...
-├── tools/                  # Validation tools
-│   ├── smart_validator.py
-│   ├── language_detector.py
+├── tools/                  # Validation & environment tools
+│   ├── smart_validator.py  # Language-agnostic build/syntax checker
+│   ├── language_detector.py # Automatic file type detection
 │   └── ...
-├── policy/                 # Safety policies
-│   ├── invariants.json
-│   └── tier_policy.json
-├── forge.py               # Interactive CLI
-└── cli.py                 # Single-task CLI
+├── policy/                 # Safety & tier policies
+│   ├── invariants.json     # Global system constraints
+│   └── tier_policy.json    # File access & modification tiers
+├── memory/                 # Persistence layer
+│   └── forgecore.db        # SQLite database for indexing
+├── forge.py               # Interactive CLI (Stateful)
+└── cli.py                 # Single-task CLI (Stateless)
 ```
 
 ## Safety Layers (22 Total)
 
-1. Tier enforcement
-2. File integrity guards
-3. Symbol validation
-4. Call graph validation
-5. Dependency validation
-6. Rewrite ratio limits
-7. Line count limits
-8. File count limits
-9. Path traversal checks
-10. Stagnation detection
-11. Build system monitoring
-12. Public API change detection
-13. Cross-tier dependency checks
-14. Module integrity checks
-15. Atomic multi-file commits
-16. Snapshot/rollback system
-17. Baseline tracking
-18. Content fingerprinting
-19. Error classification
-20. Critic pre-review
-21. Critic post-review
-22. Smart validation (adaptive)
+ForgeCore implements a comprehensive 22-layer safety stack:
+
+### Pre-Mutation (Syntactic)
+1. **Operation Support**: Validates if the requested action is supported.
+2. **File Indexing**: Ensures target files are tracked and valid.
+3. **Symbol Duplication**: Prevents duplicate definitions before writing.
+4. **Critic Intent Review**: Dual-agent review of the plan before execution.
+
+### Mutation Stage (Structural)
+5. **Rewrite Ratio (Per-File)**: Prevents excessive modification of single files.
+6. **Rewrite Ratio (Cross-File)**: Limits total project-wide changes.
+7. **Line Limit**: Caps the size of generated content.
+8. **File Count Limit**: Prevents accidental massive refactors.
+9. **Path Traversal**: Blocks access outside the project root.
+10. **File Integrity Guard**: Ensures files haven't changed during execution.
+11. **Tier Enforcement**: Protects core/system files from AI modification.
+12. **Build System Warnings**: Alerts on changes to critical configuration files.
+
+### Post-Mutation (Semantic)
+13. **Type Safety**: Basic type check for common languages.
+14. **Data Flow Analysis**: Detects uninitialized variables or use-before-def.
+15. **Resource Tracking**: Identifies potential memory leaks or null pointers.
+16. **Invariant Checking**: Prevents division by zero or array bounds errors.
+17. **Effect Tracking**: Monitors side effects in pure functions.
+
+### Execution & Verification
+18. **Build Validation**: Language-agnostic syntax/compilation check.
+19. **Module Integrity**: Verifies file-level dependencies.
+20. **Symbol Validation**: Cross-file symbol resolution check.
+21. **Call Graph Integrity**: Detects illegal cycles or recursions.
+22. **Final Critic Review**: Post-execution review of the actual result.
 
 ## Example Session
 

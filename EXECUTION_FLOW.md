@@ -8,101 +8,56 @@
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. INITIALIZATION                                                │
-│    - Index project (SQLite database)                             │
-│    - Create snapshot (filesystem backup)                         │
-│    - Create TransactionContext (isolated state)                  │
+│                    USER SUBMITS TASK/INTENT                      │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 2. PLANNING (State: PLANNING)                                    │
-│    - Planner generates PatchIntent (LLM: Qwen 2.5 Coder 7B)     │
-│    - Intent contains: operation, target files, payload           │
-│    - Dynamic baseline capture for new files                      │
+│ 1. INITIALIZATION & SNAPSHOT                                     │
+│    - Index project (SQLite database via indexer.py)              │
+│    - Create filesystem snapshot (snapshot.py)                    │
+│    - Initialize TransactionContext (transaction_context.py)       │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 3. INTENT VALIDATION                                             │
-│    ✓ Operation supported?                                        │
-│    ✓ Target files indexed?                                       │
-│    ✓ No duplicate symbols?                                       │
-│    ❌ ABORT if invalid                                           │
+│ 2. PLANNING & PRE-REVIEW                                         │
+│    - Planner generates PatchIntent (planner.py)                  │
+│    - Critic reviews intent (critic.py)                           │
+│    - User reviews & approves (interactive_session.py)            │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 4. CRITIC REVIEW (State: CRITIC_REVIEW)                          │
-│    - Critic reviews intent (LLM: DeepSeek Coder 6.7B)           │
-│    - Checks: correctness, safety, best practices                 │
-│    ❌ ABORT if rejected (MANDATORY gate)                         │
+│ 3. INTENT & MUTATION VALIDATION                                  │
+│    - ProposalValidator runs syntactic checks                      │
+│    - Check rewrite ratios, line limits, path traversal           │
+│    - Verify tier permissions (tier_policy.json)                  │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 5. MUTATION GENERATION (State: APPLYING)                         │
-│    - Generate new file content from intent                       │
-│    - Stage writes (not yet committed to disk)                    │
+│ 4. STAGED MUTATION                                               │
+│    - Apply patches to virtual workspace                          │
+│    - Verify file integrity against baseline hashes               │
+│    - Generate diff for user confirmation                         │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 6. MUTATION VALIDATION                                           │
-│    ✓ Rewrite ratio check (per-file & cross-file)                │
-│    ✓ Line limit check                                            │
-│    ✓ File count limit                                            │
-│    ✓ Path traversal check                                        │
-│    ✓ File integrity guard (unchanged since baseline)             │
-│    ✓ Tier enforcement (no tier2 modifications)                   │
-│    ✓ Build system warnings (CMakeLists, .sln, etc.)             │
-│    ❌ ABORT if validation fails                                  │
+│ 5. ATOMIC COMMIT (TRANSACTIONAL)                                 │
+│    - Perform atomic file writes to disk                          │
+│    - Synchronize SQLite index with local changes                 │
+│    - Mark transaction as partially-committed                     │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 7. ATOMIC FILE WRITES                                            │
-│    - Begin SQLite transaction (savepoint)                        │
-│    - Write all files atomically                                  │
-│    - Commit SQLite transaction                                   │
-│    - Update baselines for file integrity guard                   │
-│    ❌ ROLLBACK (files + DB) if any write fails                   │
+│ 6. MULTI-STAGE VERIFICATION                                      │
+│    - SemanticValidator: Type, flow, and resource safety          │
+│    - SmartValidator: Compiles/builds (build.py)                  │
+│    - Structural: Call graph & symbol resolution                  │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 8. SEMANTIC VALIDATION (NEW!)                                    │
-│    ✓ Type safety (type mismatches, implicit conversions)         │
-│    ✓ Data flow (uninitialized variables, use-before-def)        │
-│    ✓ Resource safety (memory leaks, null pointers)              │
-│    ✓ Invariants (division by zero, array bounds)                │
-│    ✓ Effects (side effects in pure functions)                    │
-│    ❌ ABORT if semantic errors found                             │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 9. BUILD VALIDATION (State: COMPILING)                           │
-│    - SmartValidator runs build/syntax check                      │
-│    - Language-agnostic (C++, Python, JS, etc.)                   │
-│    ❌ If build fails → classify errors → REFINEMENT              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 10. FINAL CRITIC REVIEW (State: FINAL_CRITIC)                   │
-│     - Critic reviews actual result                               │
-│     - Compares original vs modified code                         │
-│     - Logs concerns (advisory, not blocking)                     │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 11. POST-BUILD VALIDATION (State: MODULE_INTEGRITY_CHECK)       │
-│     - Begin SQLite transaction for reindexing                    │
-│     - Reindex modified files                                     │
-│     ✓ Module integrity (file-level dependencies)                │
-│     ✓ Symbol validation (cross-file symbol resolution)          │
-│     ✓ Call graph integrity (cycles, recursion)                  │
-│     - Commit SQLite transaction                                  │
-│     ❌ ROLLBACK (index only) if validation fails                │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 12. COMMIT (State: COMMIT → IDLE)                               │
-│     - Cleanup snapshot                                           │
-│     - Return success message                                     │
-│     ✅ TRANSACTION COMPLETE                                      │
+│ 7. FINAL REVIEW & CLEANUP                                        │
+│    - Final critic review of the integrated result                │
+│    - Commit SQLite state & purge snapshots                       │
+│    - Return results to user                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
