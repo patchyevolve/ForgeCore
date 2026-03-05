@@ -4,7 +4,7 @@ Validates module integrity: circular dependencies, tier violations
 """
 
 import os
-from typing import Set, List, Tuple, Dict
+from typing import Set, List, Tuple, Dict, Optional
 
 
 class CircularDependencyError(Exception):
@@ -142,7 +142,7 @@ class DependencyValidator:
         
         return includes
     
-    def _resolve_include(self, include_path: str) -> str:
+    def _resolve_include(self, include_path: str) -> Optional[str]:
         """Resolve include path to actual file in index"""
         # Simple resolution: check if file exists in index
         cursor = self.indexer.conn.cursor()

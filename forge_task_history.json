@@ -6,5 +6,77 @@
     "log_path": "logs\\session_20260303_173547.json",
     "project": "D:\\codeWorks\\graphicstics\\graphicstuff",
     "timestamp": "2026-03-03T17:41:18.012765"
+  },
+  {
+    "id": 2,
+    "description": "create a calcu;ator simple one in termial type",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_004748.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T00:49:50.298873"
+  },
+  {
+    "id": 3,
+    "description": "create a simple calculator in terminal type",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_010231.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:03:31.304223"
+  },
+  {
+    "id": 4,
+    "description": "create a calculator in terminal type",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_010417.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:13:46.669393"
+  },
+  {
+    "id": 5,
+    "description": "create a simple clock in terminal",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_011353.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:14:20.295310"
+  },
+  {
+    "id": 6,
+    "description": "add include iostream to main.cpp",
+    "status": "completed",
+    "log_path": "logs\\session_20260306_012628.json",
+    "project": "d:\\codeWorks\\ForgeCore",
+    "timestamp": "2026-03-06T01:26:42.910411"
+  },
+  {
+    "id": 7,
+    "description": "create a normal calculator",
+    "status": "completed",
+    "log_path": "logs\\session_20260306_013435.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:35:03.468288"
+  },
+  {
+    "id": 8,
+    "description": "create a simple sin wave sound creating mechanism in python",
+    "status": "completed",
+    "log_path": "logs\\session_20260306_013435.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:37:39.891352"
+  },
+  {
+    "id": 9,
+    "description": "what are the files are do we have rn",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_013435.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:47:17.772344"
+  },
+  {
+    "id": 10,
+    "description": "create a rust file that take the functionality from files in the folder and put it into it and run with out any external library",
+    "status": "completed",
+    "log_path": "logs\\session_20260306_013435.json",
+    "project": "D:\\pro",
+    "timestamp": "2026-03-06T01:48:32.229420"
   }
 ]

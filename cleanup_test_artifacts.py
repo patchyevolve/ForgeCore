@@ -82,7 +82,7 @@ def clean_main_cpp():
     with open(TARGET_FILE, 'w', encoding='utf-8') as f:
         f.write(cleaned)
     
-    print("\n✓ Cleanup complete! Only main() and includes remain.")
+    print("Cleanup complete! Only main() and includes remain.")
 
 
 if __name__ == "__main__":
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     try:
         clean_main_cpp()
     except Exception as e:
-        print(f"\n✗ Error: {e}")
+        print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
         exit(1)

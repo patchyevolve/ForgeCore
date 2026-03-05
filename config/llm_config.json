@@ -1,24 +1,14 @@
 {
-  "planner": {
-    "model": "qwen2.5-coder:7b-instruct",
-    "temperature": 0.1,
-    "max_tokens": 2048,
-    "timeout": 30,
-    "retry_attempts": 3
-  },
-  "critic": {
-    "model": "deepseek-coder:6.7b-instruct",
-    "temperature": 0.0,
-    "max_tokens": 1024,
-    "timeout": 20,
-    "retry_attempts": 2
-  },
-  "ollama": {
-    "base_url": "http://localhost:11434",
-    "api_version": "v1"
-  },
-  "fallback": {
-    "enabled": true,
-    "use_rule_based_on_timeout": true
-  }
+    "planner": {
+        "backend": "groq",
+        "model": "qwen/qwen3-32b",
+        "temperature": 0.1,
+        "timeout": 60
+    },
+    "critic": {
+        "backend": "groq",
+        "model": "openai/gpt-oss-120b",
+        "temperature": 0.1,
+        "timeout": 60
+    }
 }

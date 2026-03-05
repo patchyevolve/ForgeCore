@@ -4,9 +4,9 @@ Generates patch intents using LLM (Qwen) with rule-based fallback
 """
 
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, cast
 from core.patch_intent import PatchIntent, Operation
-from core.llm_client import create_planner_client, LLMClient
+from core.llm_client import create_planner_client, BaseLLMClient
 
 
 class PlannerError(Exception):
@@ -26,7 +26,7 @@ class Planner:
         self.logger = logger
         self.indexer = indexer
         self.use_llm = use_llm
-        self.llm_client: Optional[LLMClient] = None
+        self.llm_client: Optional[BaseLLMClient] = None
         
         # Initialize context manager
         from core.context_manager import ContextManager
@@ -35,10 +35,12 @@ class Planner:
         if use_llm:
             try:
                 self.llm_client = create_planner_client()
+                # model attribute may not exist on abstract base class
+                model_name = getattr(self.llm_client, "model", None)
                 self.logger.log_event(
                     state="INIT",
                     event="LLM_PLANNER_ENABLED",
-                    details={"model": self.llm_client.model}
+                    details={"model": model_name}
                 )
             except Exception as e:
                 self.logger.log_event(
@@ -84,24 +86,16 @@ class Planner:
         
         # Check if LLM is required but not available
         if not self.use_llm or not self.llm_client:
-            error_msg = """
-❌ LLM NOT AVAILABLE
-
-The planner requires an LLM (Ollama with Qwen 2.5 Coder) to understand natural language tasks.
-
-PROBLEM: Ollama is not installed, not running, or model not downloaded.
-
-FIX:
-1. Install Ollama: https://ollama.ai/download
-2. Pull the model: ollama pull qwen2.5-coder:7b-instruct
-3. Make sure Ollama service is running
-4. Try again
-
-Current status: LLM initialization failed during startup.
-Check the logs for details.
-"""
-            print(error_msg)
-            raise PlannerError("LLM not available. See error message above for fix.")
+            self.logger.log_event(
+                state="PLANNING",
+                event="LLM_FALLBACK_RULE_BASED",
+                details={"reason": "LLM not enabled or initialization failed"}
+            )
+            
+            if error_context and iteration > 1:
+                return self._refine_intent(task_description, error_context, previous_intent)
+            else:
+                return self._parse_task_description(task_description)
         
         # Use LLM for planning
         try:
@@ -124,7 +118,8 @@ Check the logs for details.
             event="INTENT_GENERATED",
             details={
                 "iteration": iteration,
-                "operation": intent.operation.value,
+                # operation may be None in multi-file mode (unlikely here)
+                "operation": intent.operation.value if intent.operation is not None else None,
                 "target_file": intent.target_file
             }
         )
@@ -157,6 +152,37 @@ Check the logs for details.
                     operation=Operation.CREATE_FILE,
                     target_file=filename,
                     payload={"content": content}
+                )
+        
+        # Check for include operations before generic "add"
+        if "include" in task_lower:
+            # Extract header name
+            words = task.split()
+            header = None
+            is_system = False
+            
+            for i, word in enumerate(words):
+                if word.lower() == "include" and i + 1 < len(words):
+                    header = words[i + 1].strip("'\"<>(),")
+                    # Check if it was in angle brackets
+                    if '<' in task and '>' in task:
+                        is_system = True
+                    break
+            
+            if header:
+                target_file = "main.cpp"
+                if "in" in task_lower or "to" in task_lower:
+                    for i, word in enumerate(words):
+                        if word.lower() in ["in", "to"] and i + 1 < len(words):
+                            potential_file = words[i + 1].strip("'\"(),")
+                            if potential_file.endswith(('.cpp', '.h', '.hpp')):
+                                target_file = potential_file
+                                break
+                
+                return PatchIntent(
+                    operation=Operation.ADD_INCLUDE,
+                    target_file=target_file,
+                    payload={"header": header, "system": is_system}
                 )
         
         # Generic "create" pattern - create a function with descriptive name
@@ -443,7 +469,11 @@ Check the logs for details.
             event="REFINING_INTENT",
             details={
                 "error_types": error_types,
-                "previous_operation": previous_intent.operation.value if previous_intent else None
+                "previous_operation": (
+                    previous_intent.operation.value
+                    if previous_intent and previous_intent.operation is not None
+                    else None
+                )
             }
         )
         
@@ -452,7 +482,7 @@ Check the logs for details.
         # If duplicate symbol error, try different name
         if any('duplicate' in str(e).lower() for e in errors):
             if previous_intent and previous_intent.operation == Operation.ADD_FUNCTION_STUB:
-                old_name = previous_intent.payload["name"]
+                old_name = previous_intent.payload["name"] if previous_intent and previous_intent.payload else None
                 new_name = f"{old_name}_v2"
                 
                 return PatchIntent(
@@ -584,7 +614,8 @@ RESPOND WITH VALID JSON ONLY."""
         # Add previous intent context
         if previous_intent:
             user_prompt += f"PREVIOUS INTENT:\n"
-            user_prompt += f"- Operation: {previous_intent.operation.value}\n"
+            if previous_intent and previous_intent.operation is not None:
+                user_prompt += f"- Operation: {previous_intent.operation.value}\n"
             user_prompt += f"- File: {previous_intent.target_file}\n"
             user_prompt += f"- Payload: {previous_intent.payload}\n\n"
             
@@ -627,14 +658,20 @@ Examples:
 For multi-file projects, you can generate multiple intents in sequence."""
 
         # Generate JSON
-        response_json = self.llm_client.generate_json(user_prompt, system_prompt)
+        assert self.llm_client is not None
+        # llm_client is guaranteed non-null here
+        response_json: Any = self.llm_client.generate_json(user_prompt, system_prompt)
         
         # Handle if LLM returns array instead of single object
         if isinstance(response_json, list):
             if len(response_json) > 0:
-                response_json = response_json[0]  # Take first intent
+                # response_json may be list-like; if not, leave as is
+                if isinstance(response_json, list) and response_json:
+                    response_json = response_json[0]  # Take first intent
             else:
                 raise PlannerError("LLM returned empty array")
+        # after this point we expect a dict
+        response_json = cast(Dict[str, Any], response_json)
         
         # Parse into PatchIntent
         operation_str = response_json.get("operation", "").upper()

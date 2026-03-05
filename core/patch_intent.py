@@ -152,15 +152,17 @@ class PatchIntent:
             # Single-file mode (backward compatibility)
             if self.operation is None or self.target_file is None or self.payload is None:
                 raise ValueError("Single-file mode requires operation, target_file, and payload")
-            
+            # narrow types for mypy
+            assert self.operation is not None
+            assert self.target_file is not None
+            assert self.payload is not None
+
             # Validate single-file fields
             if not isinstance(self.target_file, str) or not self.target_file.strip():
                 raise ValueError("target_file must be a non-empty string")
             if not isinstance(self.payload, dict):
                 raise ValueError("payload must be a dictionary")
-            
-            # Create internal FileMutation for consistency
-            # Note: We can't modify frozen dataclass, so we'll handle this in properties
+            # Create internal FileMutation for consistency (handled via properties)
     
     @property
     def is_multi_file(self) -> bool:
@@ -174,6 +176,9 @@ class PatchIntent:
             return self.file_mutations
         else:
             # Single-file mode: create FileMutation on the fly
+            assert self.target_file is not None
+            assert self.operation is not None
+            assert self.payload is not None
             return [FileMutation(
                 target_file=self.target_file,
                 operation=self.operation,
@@ -232,6 +237,7 @@ class PatchIntent:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation"""
         if self.is_multi_file:
+            assert self.file_mutations is not None
             return {
                 "file_mutations": [m.to_dict() for m in self.file_mutations],
                 "description": self.description,
@@ -239,6 +245,9 @@ class PatchIntent:
             }
         else:
             # Single-file mode (backward compatible)
+            assert self.operation is not None
+            assert self.target_file is not None
+            assert self.payload is not None
             return {
                 "operation": self.operation.value,
                 "target_file": self.target_file,

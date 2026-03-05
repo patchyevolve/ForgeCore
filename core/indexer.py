@@ -48,41 +48,83 @@ class ProjectIndexer:
             self._transaction_depth -= 1
 
     def index_project(self):
-        self._clear_existing_data()
+        """Index the project incrementally based on file modification times"""
+        # Get all currently indexed files and their mtimes
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT path, mtime FROM files")
+        indexed_files = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        present_files = set()
+        indexed_count = 0
+        
         for root, dirs, files in os.walk(self.project_root):
-
             # Exclude vendor/build directories
             dirs[:] = [
                 d for d in dirs
-                if d.lower() not in {".vs", "x64", "libraries", "build", "debug", "release"}
+                if d.lower() not in {".vs", "x64", "libraries", "build", "debug", "release", "__pycache__", ".git"}
             ]
 
             for file in files:
-                if file.endswith((".cpp", ".hpp", ".h", ".cc", ".cxx")):
+                if file.endswith((".cpp", ".hpp", ".h", ".cc", ".cxx", ".py")):
                     full_path = os.path.join(root, file)
                     relative_path = os.path.relpath(full_path, self.project_root)
-                    self._index_file(relative_path,full_path)
+                    present_files.add(relative_path)
+                    
+                    try:
+                        current_mtime = os.path.getmtime(full_path)
+                    except OSError:
+                        continue
+
+                    # Index if file is new or modified
+                    if relative_path not in indexed_files or indexed_files[relative_path] != current_mtime:
+                        self._index_file(relative_path, full_path, current_mtime)
+                        indexed_count += 1
+        
+        # Remove files that are no longer present
+        files_to_remove = set(indexed_files.keys()) - present_files
+        if files_to_remove:
+            self.reindex_files(list(files_to_remove)) # reindex_files handles deletion if path doesn't exist
+
         # Only commit if not in a transaction
         if self._transaction_depth == 0:
             self.conn.commit()
+            
+        # Return summary stats
+        cursor.execute("SELECT COUNT(*) FROM files")
+        total_files = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM symbols")
+        total_symbols = cursor.fetchone()[0]
+        
+        return {
+            "indexed_now": indexed_count,
+            "total_files": total_files,
+            "total_symbols": total_symbols,
+            "removed": len(files_to_remove)
+        }
 
     def _clear_existing_data(self):
+        """Force clear all index data"""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM files")
         cursor.execute("DELETE FROM includes")
         cursor.execute("DELETE FROM symbols")
         cursor.execute("DELETE FROM dependencies")
         print("Cleared existing index data")
-        # Only commit if not in a transaction
         if self._transaction_depth == 0:
             self.conn.commit()
 
-    def _index_file(self, relative_path, full_path):
+    def _index_file(self, relative_path, full_path, mtime=None):
         cursor = self.conn.cursor()
 
+        if mtime is None:
+            try:
+                mtime = os.path.getmtime(full_path)
+            except OSError:
+                mtime = 0
+
         cursor.execute(
-            "INSERT OR IGNORE INTO files (path) VALUES (?)",
-           (relative_path,)
+            "INSERT OR REPLACE INTO files (path, mtime) VALUES (?, ?)",
+           (relative_path, mtime)
         )
 
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:

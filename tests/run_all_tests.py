@@ -59,7 +59,7 @@ def cleanup_between_tests():
     try:
         import cleanup_test_artifacts
         cleanup_test_artifacts.clean_main_cpp()
-        print("✓ Cleanup complete")
+        print("Cleanup complete")
         # Add a small delay to ensure file handles are released
         import time
         time.sleep(0.5)

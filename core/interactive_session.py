@@ -71,7 +71,7 @@ class InteractiveSession:
         
         result = controller.execute_patch_intent(intent)
         
-        print(f"\n✅ Result: {result}")
+        print(f"\n[OK] Result: {result}")
         
         return {
             "status": "completed",
@@ -95,7 +95,7 @@ class InteractiveSession:
         max_rework_attempts = 3
         
         for attempt in range(max_rework_attempts):
-            print(f"\n🤖 AI is planning... (attempt {attempt + 1}/{max_rework_attempts})")
+            print(f"\n[AI] Planning... (attempt {attempt + 1}/{max_rework_attempts})")
             
             # Show progress indicator
             import sys
@@ -105,14 +105,14 @@ class InteractiveSession:
             # Progress spinner
             spinner_active = True
             def show_spinner():
-                spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+                spinner = ['|', '/', '-', '\\']
                 idx = 0
                 while spinner_active:
                     sys.stdout.write(f'\r  {spinner[idx % len(spinner)]} Generating plan...')
                     sys.stdout.flush()
                     time.sleep(0.1)
                     idx += 1
-                sys.stdout.write('\r  ✓ Plan generated!     \n')
+                sys.stdout.write('\r  [OK] Plan generated!     \n')
                 sys.stdout.flush()
             
             spinner_thread = threading.Thread(target=show_spinner, daemon=True)
@@ -146,19 +146,19 @@ class InteractiveSession:
                     "attempt": attempt + 1
                 })
                 
-                print(f"\n🔄 AI will rework based on your feedback...")
+                print(f"\n[REWORK] AI will rework based on your feedback...")
                 
             except Exception as e:
                 # Stop spinner on error
                 spinner_active = False
                 spinner_thread.join(timeout=0.5)
                 
-                print(f"\n❌ Planning failed: {e}")
+                print(f"\n[ERROR] Planning failed: {e}")
                 retry = input("\nRetry? (y/n): ").strip().lower()
                 if retry != 'y':
                     return None
         
-        print(f"\n❌ Max rework attempts ({max_rework_attempts}) reached")
+        print(f"\n[ERROR] Max rework attempts ({max_rework_attempts}) reached")
         return None
     
     def _show_intent_for_approval(
@@ -173,20 +173,22 @@ class InteractiveSession:
             (approved: bool, feedback: str)
         """
         print("\n" + "-"*70)
-        print("📋 AI GENERATED PLAN")
+        print("PLAN GENERATED")
         print("-"*70)
         
-        print(f"\nOperation: {intent.operation.value}")
+        op_val = intent.operation.value if intent.operation is not None else '<none>'
+        print(f"\nOperation: {op_val}")
         print(f"Target File: {intent.target_file}")
         print(f"\nPayload:")
-        for key, value in intent.payload.items():
+        payload = intent.payload or {}
+        for key, value in payload.items():
             if key == "content" and len(str(value)) > 200:
                 print(f"  {key}: {str(value)[:200]}... ({len(str(value))} chars)")
             else:
                 print(f"  {key}: {value}")
         
         # Show preview of what will be done
-        print(f"\n📝 What this will do:")
+        print(f"\n  What this will do:")
         self._explain_intent(intent)
         
         # Show diff preview if possible
@@ -207,7 +209,7 @@ class InteractiveSession:
                 return False, feedback if feedback else "User rejected without reason"
             
             elif choice == 'm':
-                print("\n📝 Modification options:")
+                print("\n  Modification options:")
                 print("1. Change target file")
                 print("2. Modify payload")
                 print("3. Cancel")
@@ -219,10 +221,10 @@ class InteractiveSession:
                     if new_file:
                         # Create modified intent
                         # Note: PatchIntent is frozen, so we need to create new one
-                        print("⚠️  File modification not yet implemented")
+                        print("  [!] File modification not yet implemented")
                 
                 elif mod_choice == '2':
-                    print("⚠️  Payload modification not yet implemented")
+                    print("  [!] Payload modification not yet implemented")
                 
                 # For now, just continue to approval
                 continue
@@ -241,14 +243,26 @@ class InteractiveSession:
         import difflib
         
         try:
-            # Get current file content
+            # Resolve file path relative to project root (from controller)
+            # and get current content for comparison
+            # Note: We need to get project_path from the controller being passed in run_task
+            # For simplicity in this method, we'll try to resolve relative to os.getcwd() 
+            # or the provided target_file path
             file_path = intent.target_file
+            if file_path is None:
+                return
             
-            # Check if file exists
+            # Try to resolve absolute path for existence check
+            # In a real environment, InteractiveSession should have access to the target_project_path
+            # For now, we'll check both relative and absolute to be safe
+            if not os.path.isabs(file_path):
+                # This is a heuristic - ideally we'd pass the controller's path here
+                pass
+            
             if not os.path.exists(file_path):
                 if intent.operation == Operation.CREATE_FILE:
-                    print(f"\n📄 DIFF PREVIEW (new file):")
-                    content = intent.payload.get("content", "")
+                    print(f"\n  DIFF PREVIEW (new file):")
+                    content = (intent.payload or {}).get("content", "")
                     lines = content.splitlines()[:20]  # Show first 20 lines
                     for i, line in enumerate(lines, 1):
                         print(f"  + {i:3d} | {line}")
@@ -279,7 +293,7 @@ class InteractiveSession:
             ))
             
             if diff:
-                print(f"\n📄 DIFF PREVIEW:")
+                print(f"\n  DIFF PREVIEW:")
                 # Show first 30 lines of diff
                 for line in diff[:30]:
                     if line.startswith('+') and not line.startswith('+++'):
@@ -294,10 +308,10 @@ class InteractiveSession:
                 if len(diff) > 30:
                     print(f"  ... and {len(diff) - 30} more diff lines")
             else:
-                print(f"\n📄 No changes detected in preview")
+                print(f"\n  No changes detected in preview")
         
         except Exception as e:
-            print(f"\n⚠️  Could not generate diff preview: {e}")
+            print(f"\n  [WARN] Could not generate diff preview: {e}")
     
     def _preview_content(self, old_content: str, intent: PatchIntent) -> Optional[str]:
         """
@@ -309,19 +323,19 @@ class InteractiveSession:
         op = intent.operation
         
         if op == Operation.CREATE_FILE:
-            return intent.payload.get("content", "")
+            return (intent.payload or {}).get("content", "")
         
         elif op == Operation.APPEND_RAW:
-            content = intent.payload.get("content", "")
+            content = (intent.payload or {}).get("content", "")
             return old_content + "\n" + content + "\n"
         
         elif op == Operation.ADD_FUNCTION_STUB:
-            func_name = intent.payload.get("name", "unknown")
+            func_name = (intent.payload or {}).get("name", "unknown")
             return old_content + f"\nvoid {func_name}()\n{{\n}}\n"
         
         elif op == Operation.ADD_INCLUDE:
-            header = intent.payload.get("header", "")
-            is_system = intent.payload.get("system", False)
+            header = (intent.payload or {}).get("header", "")
+            is_system = (intent.payload or {}).get("system", False)
             if is_system:
                 include_line = f"#include <{header}>"
             else:
@@ -331,8 +345,8 @@ class InteractiveSession:
             return include_line + "\n" + old_content
         
         elif op == Operation.REPLACE_CONTENT:
-            old = intent.payload.get("old_content", "")
-            new = intent.payload.get("new_content", "")
+            old = (intent.payload or {}).get("old_content", "")
+            new = (intent.payload or {}).get("new_content", "")
             return old_content.replace(old, new, 1)
         
         # For complex operations, return None
@@ -344,40 +358,41 @@ class InteractiveSession:
         file = intent.target_file
         
         if op == Operation.CREATE_FILE:
-            lines = len(intent.payload.get("content", "").splitlines())
+            lines = len(((intent.payload or {}).get("content", "")).splitlines())
             print(f"  → Create new file '{file}' with {lines} lines of code")
         
         elif op == Operation.ADD_FUNCTION_STUB:
-            func_name = intent.payload.get("name", "unknown")
+            func_name = (intent.payload or {}).get("name", "unknown")
             print(f"  → Add function stub '{func_name}()' to '{file}'")
         
         elif op == Operation.APPEND_RAW:
-            content = intent.payload.get("content", "")
+            content = (intent.payload or {}).get("content", "")
             lines = len(content.splitlines())
             print(f"  → Append {lines} lines to end of '{file}'")
         
         elif op == Operation.REPLACE_FUNCTION:
-            func_name = intent.payload.get("name", "unknown")
+            func_name = (intent.payload or {}).get("name", "unknown")
             print(f"  → Replace function '{func_name}()' body in '{file}'")
         
         elif op == Operation.INSERT_BEFORE:
-            anchor = intent.payload.get("anchor", "unknown")
+            anchor = (intent.payload or {}).get("anchor", "unknown")
             print(f"  → Insert code before '{anchor}' in '{file}'")
         
         elif op == Operation.INSERT_AFTER:
-            anchor = intent.payload.get("anchor", "unknown")
+            anchor = (intent.payload or {}).get("anchor", "unknown")
             print(f"  → Insert code after '{anchor}' in '{file}'")
         
         elif op == Operation.ADD_INCLUDE:
-            header = intent.payload.get("header", "unknown")
-            is_system = intent.payload.get("system", False)
+            header = (intent.payload or {}).get("header", "unknown")
+            is_system = (intent.payload or {}).get("system", False)
             bracket = "<>" if is_system else '""'
             print(f"  → Add #include {bracket[0]}{header}{bracket[1]} to '{file}'")
         
         elif op == Operation.REPLACE_CONTENT:
-            old = intent.payload.get("old_content", "")[:50]
-            new = intent.payload.get("new_content", "")[:50]
+            old = ((intent.payload or {}).get("old_content", ""))[:50]
+            new = ((intent.payload or {}).get("new_content", ""))[:50]
             print(f"  → Replace '{old}...' with '{new}...' in '{file}'")
         
         else:
-            print(f"  → Perform {op.value} on '{file}'")
+            val = op.value if op is not None else '<none>'
+            print(f"  → Perform {val} on '{file}'")

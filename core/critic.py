@@ -7,7 +7,7 @@ Falls back to simulated approval on LLM failure.
 
 from typing import Dict, Any, Tuple, Optional
 from core.patch_intent import PatchIntent
-from core.llm_client import create_critic_client, LLMClient
+from core.llm_client import create_critic_client, BaseLLMClient
 
 
 class Critic:
@@ -26,7 +26,7 @@ class Critic:
             use_llm: Enable LLM-based review (default: True)
         """
         self.use_llm = use_llm
-        self.llm_client: Optional[LLMClient] = None
+        self.llm_client: Optional[BaseLLMClient] = None
         
         if use_llm:
             try:
@@ -35,7 +35,7 @@ class Critic:
                 print(f"Warning: Failed to initialize LLM critic: {e}")
                 self.use_llm = False
     
-    def review_intent(self, intent: PatchIntent, file_content: str, task: str = None) -> Tuple[bool, str]:
+    def review_intent(self, intent: PatchIntent, file_content: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
         Review a proposed mutation before execution.
         
@@ -47,16 +47,18 @@ class Critic:
         Returns:
             (approved: bool, feedback: str)
         """
+        # normalize task to avoid passing None further
+        task_str = task or ""
         if self.use_llm and self.llm_client:
             try:
-                return self._review_intent_llm(intent, file_content, task)
+                return self._review_intent_llm(intent, file_content, task_str)
             except Exception as e:
                 print(f"Warning: LLM review failed, using simulated: {e}")
-                return self._review_intent_simulated(intent, file_content, task)
+                return self._review_intent_simulated(intent, file_content, task_str)
         else:
-            return self._review_intent_simulated(intent, file_content, task)
+            return self._review_intent_simulated(intent, file_content, task_str)
     
-    def review_result(self, intent: PatchIntent, original: str, modified: str, task: str = None) -> Tuple[bool, str]:
+    def review_result(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
         Review the final result after mutation.
         
@@ -69,35 +71,39 @@ class Critic:
         Returns:
             (approved: bool, feedback: str)
         """
+        task_str = task or ""
         if self.use_llm and self.llm_client:
             try:
-                return self._review_result_llm(intent, original, modified, task)
+                return self._review_result_llm(intent, original, modified, task_str)
             except Exception as e:
                 print(f"Warning: LLM review failed, using simulated: {e}")
-                return self._review_result_simulated(intent, original, modified, task)
+                return self._review_result_simulated(intent, original, modified, task_str)
         else:
-            return self._review_result_simulated(intent, original, modified, task)
+            return self._review_result_simulated(intent, original, modified, task_str)
     
-    def _review_intent_simulated(self, intent: PatchIntent, file_content: str, task: str = None) -> Tuple[bool, str]:
+    def _review_intent_simulated(self, intent: PatchIntent, file_content: str, task: Optional[str] = None) -> Tuple[bool, str]:
+        """Simulated review - always approves."""
+        # `task` parameter is unused; normalized earlier if needed
+        return True, "Simulated approval"
+    
+    def _review_result_simulated(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """Simulated review - always approves."""
         return True, "Simulated approval"
     
-    def _review_result_simulated(self, intent: PatchIntent, original: str, modified: str, task: str = None) -> Tuple[bool, str]:
-        """Simulated review - always approves."""
-        return True, "Simulated approval"
-    
-    def _review_intent_llm(self, intent: PatchIntent, file_content: str, task: str = None) -> Tuple[bool, str]:
+    def _review_intent_llm(self, intent: PatchIntent, file_content: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
         LLM-based intent review using DeepSeek.
         
         Args:
             intent: Proposed PatchIntent
             file_content: Current file content
-            task: Task description
+            task: Optional task description
             
         Returns:
             (approved: bool, feedback: str)
         """
+        assert self.llm_client is not None, "LLM client must exist for LLM review"
+        task_str = task or ""
         # Build system prompt
         system_prompt = """You are a code review critic for ForgeCore.
 Review the proposed mutation for safety and correctness.
@@ -116,10 +122,10 @@ RESPOND IN JSON:
 }"""
 
         # Build user prompt
-        user_prompt = f"""TASK: {task if task else 'Not specified'}
+        user_prompt = f"""TASK: {task_str if task_str else 'Not specified'}
 
 PROPOSED INTENT:
-- Operation: {intent.operation.value}
+- Operation: {intent.operation.value if intent.operation is not None else '<none>'}
 - Target File: {intent.target_file}
 - Payload: {intent.payload}
 
@@ -140,7 +146,7 @@ Review this mutation."""
         
         return approved, feedback
     
-    def _review_result_llm(self, intent: PatchIntent, original: str, modified: str, task: str = None) -> Tuple[bool, str]:
+    def _review_result_llm(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
         LLM-based result review using DeepSeek.
         
@@ -148,11 +154,13 @@ Review this mutation."""
             intent: Executed PatchIntent
             original: Original file content
             modified: Modified file content
-            task: Task description
+            task: Optional task description
             
         Returns:
             (approved: bool, feedback: str)
         """
+        assert self.llm_client is not None, "LLM client must exist for LLM review"
+        task_str = task or ""
         # Build system prompt
         system_prompt = """You are a final code review critic for ForgeCore.
 Review the actual mutation result for correctness and quality.
@@ -171,9 +179,9 @@ RESPOND IN JSON:
 }"""
 
         # Build user prompt with diff
-        user_prompt = f"""TASK: {task if task else 'Not specified'}
+        user_prompt = f"""TASK: {task_str if task_str else 'Not specified'}
 
-OPERATION: {intent.operation.value}
+OPERATION: {intent.operation.value if intent.operation is not None else '<none>'}
 
 ORIGINAL (first 300 chars):
 {original[:300]}

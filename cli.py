@@ -52,7 +52,7 @@ def save_config(config):
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, indent=2, fp=f)
-        print(f"✓ Configuration saved to {CONFIG_FILE}")
+        print(f"[OK] Configuration saved to {CONFIG_FILE}")
     except Exception as e:
         print(f"Warning: Could not save config file: {e}")
 
@@ -100,7 +100,7 @@ def cmd_task(task_description, project_path):
     
     # Show detected language
     lang_info = controller.validator.language_info
-    print(f"\n📊 Project Analysis:")
+    print(f"\n  Project Analysis:")
     print(f"  Language: {lang_info['primary_language'] or 'Unknown'}")
     print(f"  Build System: {lang_info['build_system'] or 'None detected'}")
     if lang_info['is_multi_language']:
@@ -188,10 +188,10 @@ def cmd_clean():
     import cleanup_test_artifacts
     try:
         cleanup_test_artifacts.clean_main_cpp()
-        print("\n✓ Cleanup complete")
+        print("\n[OK] Cleanup complete")
         return 0
     except Exception as e:
-        print(f"\n✗ Cleanup failed: {e}")
+        print(f"\n[ERROR] Cleanup failed: {e}")
         return 1
 
 def cmd_config():
@@ -217,16 +217,16 @@ def cmd_config():
         if new_path and os.path.exists(new_path):
             config['project_path'] = new_path
             save_config(config)
-            print(f"✓ Project path set to: {new_path}")
+            print(f"[OK] Project path set to: {new_path}")
         elif new_path:
-            print(f"✗ Path does not exist: {new_path}")
+            print(f"[ERROR] Path does not exist: {new_path}")
         else:
-            print("✗ No path provided")
+            print("[ERROR] No path provided")
     
     elif choice == '2':
         config = {}
         save_config(config)
-        print("✓ Configuration reset to defaults")
+        print("[OK] Configuration reset to defaults")
     
     return 0
 

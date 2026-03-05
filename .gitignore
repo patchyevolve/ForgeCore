@@ -45,4 +45,6 @@ test_forge_project/
 
 # OS
 .DS_Store
-Thumbs.db
+
+# Secrets
+config/secrets.json

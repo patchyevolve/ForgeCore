@@ -5,45 +5,99 @@ import subprocess
 from datetime import date, datetime
 
 class SnapshotManager:
-    def __init__(self, target_project_path, snapshot_root="snapshots"):
-        self.target_project_path = os.path.abspath(target_project_path)
-        self.snapshot_root = snapshot_root
+    def __init__(self, target_project_path: str, snapshot_root: str = "snapshots"):
+        self.target_project_path: str = os.path.abspath(target_project_path)
+        self.snapshot_root: str = snapshot_root
         os.makedirs(self.snapshot_root, exist_ok=True)
 
-        self.snapshot_id = None
-        self.snapshot_path = None
+        self.snapshot_id: str | None = None
+        self.snapshot_path: str | None = None
 
     def _is_git_repo(self):
         return os.path.isdir(os.path.join(self.target_project_path, ".git"))
 
-    def create_snapshot(self):
+    def create_snapshot(self, target_files=None):
+        """Create a snapshot (full or selective)"""
         self.snapshot_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.snapshot_path = os.path.join(self.snapshot_root, self.snapshot_id)
-        print("snapshot path:", self.snapshot_path)
-        if self._is_git_repo():
+        os.makedirs(self.snapshot_path, exist_ok=True)
+        
+        if target_files:
+            self._create_selective_snapshot(target_files)
+        elif self._is_git_repo():
             self._create_git_snapshot()
         else:
             self._create_filesystem_snapshot()
 
     def rollback(self):
+        """Rollback to the current snapshot"""
         if self._is_git_repo():
-            self._rollback_git()
-        else:
-            self._rollback_filesystem()
+            # snapshot_path should have been set by create_snapshot
+            assert self.snapshot_path is not None, "No snapshot path defined"
+            if not os.path.exists(self.snapshot_path):
+                self._rollback_git()
+                return
+        # otherwise fall back to filesystem rollback
+        self._rollback_filesystem()
 
     def _create_git_snapshot(self):
+        """Use git stash for snapshots (only if no selective files)"""
         subprocess.run(
             ["git", "stash", "push", "-u"],
-            cwd= self.target_project_path,
-            check = True
+            cwd=self.target_project_path,
+            check=True
         )
 
     def _create_filesystem_snapshot(self):
+        """Full directory copy snapshot"""
+        assert self.snapshot_path is not None, "snapshot_path not set"
         shutil.copytree(
             self.target_project_path,
             self.snapshot_path,
             dirs_exist_ok=True
         )
+
+    def _create_selective_snapshot(self, target_files):
+        """Copy only specific files to snapshot"""
+        assert self.snapshot_path is not None, "snapshot_path must be set before selective copy"
+        for rel_path in target_files:
+            src = os.path.join(self.target_project_path, rel_path)
+            dst = os.path.join(self.snapshot_path, rel_path)
+            
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+
+    def _rollback_git(self):
+        """Rollback using git stash"""
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=self.target_project_path,
+            check=True
+        )
+
+    def _rollback_filesystem(self):
+        """Restore files from the snapshot directory"""
+        if not self.snapshot_path or not os.path.exists(self.snapshot_path):
+            raise RuntimeError("No valid snapshot to rollback to.")
+
+        # Selective restore: only overwrite files present in the snapshot
+        # This works for both full and selective snapshots
+        for root, dirs, files in os.walk(self.snapshot_path):
+            # snapshot_path should exist per previous check
+            assert self.snapshot_path is not None
+            rel_root = os.path.relpath(root, self.snapshot_path)
+            if rel_root == ".":
+                rel_root = ""
+            
+            for file in files:
+                src = os.path.join(root, file)
+                dst = os.path.join(self.target_project_path, rel_root, file)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
 
     def cleanup_snapshot(self):
         """Clean up snapshot with retry logic for Windows file locking"""
@@ -111,26 +165,3 @@ class SnapshotManager:
                 f.write(f"{path}\n")
         except Exception:
             pass
-
-    def _rollback_filesystem(self):
-        if not self.snapshot_path or not os.path.exists(self.snapshot_path):
-            raise RuntimeError("No valid snapshot to rollback to.")
-
-        # 1. Delete all current project contents
-        for item in os.listdir(self.target_project_path):
-            item_path = os.path.join(self.target_project_path, item)
-
-            if os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-            else:
-                os.remove(item_path)
-
-        # 2. Restore snapshot contents
-        for item in os.listdir(self.snapshot_path):
-            src = os.path.join(self.snapshot_path, item)
-            dst = os.path.join(self.target_project_path, item)
-
-            if os.path.isdir(src):
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)

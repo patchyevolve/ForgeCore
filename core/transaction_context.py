@@ -6,7 +6,7 @@ from controller state, enabling cleaner separation of concerns and better testab
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Set, List, Optional
+from typing import Dict, Set, List, Optional, Any
 from datetime import datetime
 
 
@@ -157,13 +157,13 @@ class TransactionContext:
         """
         return self.iteration_history[-1] if self.iteration_history else None
     
-    def get_error_context(self) -> Optional[dict]:
+    def get_error_context(self) -> Optional[List[Dict[str, Any]]]:
         """
         Get error context from last iteration.
         Used for planner refinement.
         
         Returns:
-            Error dict or None if no errors
+            List of error dictionaries or None if no errors
         """
         last = self.get_last_iteration()
         return last.get('errors') if last else None

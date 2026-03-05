@@ -24,6 +24,14 @@ def test_controller_reuse():
     logger = Logger()
     controller = Controller(TARGET_PROJECT_PATH, logger)
     controller.builder = MockBuild(TARGET_PROJECT_PATH)
+
+    # wrap index_project to count calls for performance regression test
+    call_count = {'idx': 0}
+    orig_index = controller.indexer.index_project
+    def counted_index():
+        call_count['idx'] += 1
+        return orig_index()
+    controller.indexer.index_project = counted_index
     
     # First execution
     print("\n[Execution 1]")
@@ -70,6 +78,13 @@ def test_controller_reuse():
     
     # Check that all executions succeeded
     all_succeeded = ("succced" in result1 and "succced" in result2 and "succced" in result3)
+
+    # performance check: indexing should have happened only once (first run)
+    print(f"Index project was called {call_count['idx']} times")
+    if call_count['idx'] <= 1:
+        print("PASS index freshness optimization")
+    else:
+        print("WARN indexing occurred multiple times")
     
     # Check that iteration counters were reset
     # (After each execution, current_iteration should be 1 for single-iteration success)

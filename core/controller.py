@@ -3,7 +3,7 @@ import difflib
 import hashlib
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 from core.state_machine import StateMachine, State, InvalidTransitionError
 from core.snapshot import SnapshotManager
 from tools.smart_validator import SmartValidator
@@ -21,6 +21,28 @@ from core.transaction_context import TransactionContext
 
 
 class Controller:
+
+    @property
+    def builder(self):
+        """Compatibility property for legacy tests"""
+        return self.validator
+    
+    @builder.setter
+    def builder(self, value):
+        """Compatibility setter for legacy tests with shimming for MockBuild"""
+        if hasattr(value, 'run_build') and not hasattr(value, 'validate'):
+            # Shim for tests that expect a 'builder' with run_build()
+            class ValidatorShim:
+                def __init__(self, builder_obj):
+                    self.builder_obj = builder_obj
+                def validate(self, modified_files=None):
+                    res = self.builder_obj.run_build()
+                    if isinstance(res, dict) and 'success' not in res:
+                        res['success'] = (res.get('exit_code') == 0)
+                    return res
+            self.validator = ValidatorShim(value)
+        else:
+            self.validator = value
 
     SUPPORTED_OPERATIONS = {
         Operation.APPEND_RAW,
@@ -89,6 +111,8 @@ class Controller:
         self.iteration_history = []
         self.last_error_hash = None
         self.current_task_description = None
+        self._index_fresh = False
+        self._mutations_applied = False
 
         self.state_machine = StateMachine(logger)
         self.snapshot_manager = SnapshotManager(target_project_path)
@@ -115,10 +139,10 @@ class Controller:
         self.semantic_validator = SemanticValidator(self.indexer, logger)
         
         # Initialize planner
-        self.planner = Planner(logger, self.indexer)
+        use_llm_planner = os.getenv('FORGECORE_USE_LLM', 'true').lower() == 'true'
+        self.planner = Planner(logger, self.indexer, use_llm=use_llm_planner)
         
         # Initialize critic (disable LLM for tests via env var)
-        import os
         use_llm_critic = os.getenv('FORGECORE_USE_LLM', 'true').lower() == 'true'
         from core.critic import Critic
         self.critic = Critic(use_llm=use_llm_critic)
@@ -179,6 +203,8 @@ class Controller:
 
     def _generate_content(self, original_content, intent: PatchIntent):
         """Generate new file content based on intent operation"""
+        # Payload is required for all supported operations; narrow type for mypy
+        assert intent.payload is not None, "intent.payload must be provided"
         
         if intent.operation == Operation.CREATE_FILE:
             # For CREATE_FILE, return the content directly
@@ -649,7 +675,10 @@ class Controller:
         # File integrity guard - verify files unchanged since baseline
         for file in staged_writes.keys():
             baseline = context.get_baseline(file)
-            is_new_file = baseline and baseline.get("hash") == ""
+            if baseline is None:
+                context.clear_candidates()
+                return False, f"Internal error: no baseline for {file}"
+            is_new_file = baseline.get("hash") == ""
             
             if not is_new_file:
                 # Only check integrity for existing files
@@ -892,7 +921,11 @@ class Controller:
         self.state_machine.transition_to(State.ABORT)
         if self._snapshot_exists():
             self.snapshot_manager.rollback()
-        self.indexer.index_project()
+        # Only re-index if mutations were actually applied on disk
+        if self._mutations_applied:
+            self.indexer.index_project()
+            self._index_fresh = True
+            self._mutations_applied = False
         self.snapshot_manager.cleanup_snapshot()
         self.state_machine.transition_to(State.IDLE)
         return reason
@@ -908,11 +941,20 @@ class Controller:
         Returns:
             Result message
         """
-        # Index project
-        self.indexer.index_project()
+        # Index project (skip if already fresh from a recent run)
+        if not self._index_fresh:
+            self.indexer.index_project()
+            self._index_fresh = True
+        self._mutations_applied = False
         
-        # Create snapshot
-        self.snapshot_manager.create_snapshot()
+        # Determine target files for selective snapshot if intent is already known
+        # In planner mode, intent is None initially, so we'll handle it inside the loop
+        target_files = None
+        if intent:
+            target_files = list(self._get_target_files(intent))
+        
+        # Create snapshot (Selective if target_files is known)
+        self.snapshot_manager.create_snapshot(target_files=target_files)
         
         if not self._snapshot_exists():
             return self._handle_abort("Snapshot creation failed unexpectedly")
@@ -929,6 +971,9 @@ class Controller:
                 try:
                     error_context = context.get_error_context()
                     previous_intent = context.get_previous_intent()
+                    # Planner API expects a list of error dicts or None; our type change
+                    # ensures error_context has correct signature now.
+                    # error_context now correctly typed as Optional[List[Dict[str, Any]]]
                     
                     # Generate new intent for this iteration
                     intent = self.planner.generate_intent(
@@ -937,6 +982,10 @@ class Controller:
                         iteration=context.current_iteration,
                         previous_intent=previous_intent
                     )
+                    
+                    # Update snapshot if new files are targeted in this iteration
+                    new_targets = self._get_target_files(intent)
+                    self.snapshot_manager._create_selective_snapshot(list(new_targets))
                     
                 except Exception as e:
                     self.logger.log_event(
@@ -950,24 +999,12 @@ class Controller:
             
             # DYNAMIC BASELINE EXPANSION - Capture baselines for new files
             # This is critical for multi-iteration planner execution
-            self._ensure_baselines(intent, context)
+            # by this point the intent must have been generated (planner mode) or
+            # provided by caller (direct mode) so we can safely assert it's not None
+            # Narrow type for remainder of iteration
+            intent = cast(PatchIntent, intent)
             
-            # High-level iteration summary for user
-            try:
-                print("\n" + "=" * 70)
-                print(f"ITERATION {context.current_iteration}")
-                print("=" * 70)
-                if intent.is_multi_file:
-                    print(f"Planned operation: multi-file intent")
-                else:
-                    print(f"Planned operation: {intent.operation.value}")
-                target_files = intent.target_files
-                print(f"Target file(s): {', '.join(target_files)}")
-            except Exception:
-                # Never let UI printing break core execution
-                pass
-            
-            # Validate intent
+            # Validate intent BEFORE baseline capture to catch unindexed files early
             valid, reason = self._validate_intent(intent)
             if not valid:
                 self.logger.log_event(
@@ -978,6 +1015,29 @@ class Controller:
                 # Sync state before abort
                 self._sync_state_from_context(context)
                 return self._handle_abort(f"Semantic rejection: {reason}")
+            
+            # DYNAMIC BASELINE EXPANSION - Capture baselines for the validated files
+            self._ensure_baselines(intent, context)
+            
+            # High-level iteration summary for user
+            try:
+                # reaffirm intent non-null for type checker (should already be narrowed)
+                assert intent is not None
+                print("\n" + "=" * 70)
+                print(f"ITERATION {context.current_iteration}")
+                print("=" * 70)
+                if intent.is_multi_file:
+                    print(f"Planned operation: multi-file intent")
+                else:
+                    # in single-file mode the operation field is guaranteed to be set
+                    assert intent.operation is not None
+                    print(f"Planned operation: {intent.operation.value}")
+                target_files = intent.target_files
+                print(f"Target file(s): {', '.join(target_files)}")
+            except Exception:
+                # Never let UI printing break core execution
+                pass
+            
             
             # Compute intent fingerprint
             intent_hash = self._compute_intent_fingerprint(intent)
@@ -990,20 +1050,37 @@ class Controller:
             # CRITIC REVIEW
             self.state_machine.transition_to(State.CRITIC_REVIEW)
             
-            # Get file content for review
-            target_file = intent.target_file
-            try:
-                with open(os.path.join(self.target_project_path, target_file), 'r') as f:
-                    file_content = f.read()
-            except FileNotFoundError:
-                # File doesn't exist yet (CREATE_FILE operation)
-                file_content = ""
+            # Get file content for review (Use baseline cache to avoid redundant I/O)
+            # Support both single-file and multi-file intents
+            # intent guaranteed non-null by assert above
+            if not intent.is_multi_file:
+                assert intent.target_file is not None
+                target_file = intent.target_file
+            else:
+                target_file = intent.target_files[0]
+            
+            baseline = context.get_baseline(target_file)
+            if baseline and baseline.get("content") is not None:
+                file_content = baseline["content"]
+            else:
+                # Fallback to disk if not in baseline (e.g. first attempt at new file)
+                try:
+                    with open(os.path.join(self.target_project_path, target_file), 'r') as f:
+                        file_content = f.read()
+                except (FileNotFoundError, TypeError):
+                    # File doesn't exist yet (CREATE_FILE operation) or invalid path
+                    file_content = ""
             
             # Review intent with critic
+            # determine task description for critic (may be None)
+            task_desc: Optional[str] = None
+            if context.planner_context:
+                # planner_context is a generic dict; cast safely
+                task_desc = context.planner_context.get('task_description')  # type: ignore
             approved, feedback = self.critic.review_intent(
                 intent,
                 file_content,
-                context.planner_context.get('task_description') if context.planner_context else None
+                task_desc
             )
             
             self.logger.log_event(
@@ -1042,6 +1119,7 @@ class Controller:
             # Check for stagnation (iteration 2+)
             if context.current_iteration > 1:
                 last_iteration = context.get_last_iteration()
+                assert last_iteration is not None
                 
                 if (last_iteration['intent_hash'] == intent_hash and
                     last_iteration['content_hash'] == content_hash):
@@ -1150,11 +1228,14 @@ class Controller:
                         
                         original_content = context.baselines.get(file, {}).get('content', '')
                         
+                        task_desc: Optional[str] = None
+                        if context.planner_context:
+                            task_desc = context.planner_context.get('task_description')  # type: ignore
                         approved, feedback = self.critic.review_result(
                             intent,
                             original_content,
                             modified_content,
-                            context.planner_context.get('task_description') if context.planner_context else None
+                            task_desc
                         )
                         
                         self.logger.log_event(

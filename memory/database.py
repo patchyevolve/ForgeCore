@@ -16,6 +16,7 @@ class ForgeDatabase:
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT UNIQUE,
+                mtime REAL,
                 last_indexed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -50,6 +51,19 @@ class ForgeDatabase:
         """)
 
         self.conn.commit()
+        self._migrate_schema()
+
+    def _migrate_schema(self):
+        """Add missing columns to existing tables"""
+        cursor = self.conn.cursor()
+        
+        # Check if mtime exists in files table
+        cursor.execute("PRAGMA table_info(files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'mtime' not in columns:
+            print("[INFO] Migrating database: adding mtime column to files table")
+            cursor.execute("ALTER TABLE files ADD COLUMN mtime REAL")
+            self.conn.commit()
 
     def get_symbol_definition(self, symbol_name):
         cursor = self.conn.cursor()

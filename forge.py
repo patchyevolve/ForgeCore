@@ -49,6 +49,15 @@ class ForgeREPL:
             self.logger = Logger()
             self.controller = Controller(self.project_path, self.logger)
             
+            # Perform initial indexing to build context
+            print("[INFO] Indexing project...")
+            stats = self.controller.indexer.index_project()
+            self.controller._index_fresh = True
+            
+            print(f"  [OK] Index complete: {stats['total_files']} files, {stats['total_symbols']} symbols")
+            if stats['indexed_now'] > 0:
+                print(f"  [OK] Successfully indexed {stats['indexed_now']} new/modified files")
+            
             # Show detected language
             lang_info = self.controller.validator.language_info
             print(f"\n[OK] Project Analysis:")
@@ -556,45 +565,95 @@ class ForgeREPL:
         return 0
 
 
+def _save_project_config(project_path):
+    """Save project path to config for future runs."""
+    import json
+    config_file = "forgecore_config.json"
+    try:
+        config = {}
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+        config['project_path'] = project_path
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass  # Best-effort
+
+
 def main():
     """Main entry point"""
     # Set UTF-8 encoding for Windows
     if sys.platform == 'win32':
-        import codecs
-        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
-        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+        try:
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+        except Exception:
+            pass  # If encoding setup fails, continue anyway
     
-    # Get project path from args or config
+    # Get project path from args or config or interactive prompt
+    project_path = None
+    
     if len(sys.argv) > 1:
-        project_path = sys.argv[1]
+        project_path = os.path.abspath(sys.argv[1])
     else:
         # Try to load from config
         config_file = "forgecore_config.json"
+        last_path = None
         if os.path.exists(config_file):
             import json
             try:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
-                    project_path = config.get('project_path', r"D:\codeWorks\graphicstics\graphicstuff")
-            except:
-                project_path = r"D:\codeWorks\graphicstics\graphicstuff"
-        else:
-            project_path = r"D:\codeWorks\graphicstics\graphicstuff"
+                    last_path = config.get('project_path')
+            except Exception:
+                pass
+        
+        print("\n" + "=" * 70)
+        print("FORGECORE - PROJECT SETUP")
+        print("=" * 70)
+        
+        if last_path:
+            print(f"\nLast used project: {last_path}")
+            choice = input("Use this project? (y/n, or enter new path): ").strip()
+            
+            if not choice or choice.lower() == 'y':
+                project_path = last_path
+            elif choice.lower() == 'n':
+                project_path = None # Will ask below
+            else:
+                project_path = os.path.abspath(choice)
+        
+        if not project_path:
+            print("\nEnter the full path to your project folder.")
+            print("If the folder doesn't exist, it will be created for you.\n")
+            
+            while True:
+                path_input = input("Project path: ").strip()
+                if not path_input:
+                    print("  [!] Please enter a valid path.\n")
+                    continue
+                project_path = os.path.abspath(path_input)
+                break
     
     # Check if project exists, if not offer to create it
     if not os.path.exists(project_path):
-        print(f"\nProject path does not exist: {project_path}")
+        print(f"\n[!] Project path does not exist: {project_path}")
         create = input("Create new project folder? (y/n): ").strip().lower()
         if create == 'y':
             try:
                 os.makedirs(project_path, exist_ok=True)
-                print(f"[OK] Created project folder: {project_path}")
+                print(f"  [OK] Created project folder: {project_path}")
             except Exception as e:
-                print(f"ERROR: Could not create folder: {e}")
+                print(f"  [ERROR] Could not create folder: {e}")
                 return 1
         else:
-            print("\nUsage: python forge.py [project_path]")
+            print("\nAborted. Usage: python forge.py [project_path]")
             return 1
+            
+    # Save to config for future runs
+    _save_project_config(project_path)
     
     # Run REPL
     repl = ForgeREPL(project_path)

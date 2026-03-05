@@ -3,7 +3,7 @@ Call Graph Integrity Analyzer
 Validates call graph integrity: dead code, unreachable functions, recursion
 """
 
-from typing import Set, List, Dict, Tuple, Optional
+from typing import Set, List, Dict, Tuple, Optional, Any
 
 
 class DeadCodeError(Exception):
@@ -378,7 +378,7 @@ class CallGraphAnalyzer:
         
         return None
     
-    def get_call_graph_stats(self, file_path: str) -> Dict[str, any]:
+    def get_call_graph_stats(self, file_path: str) -> Dict[str, Any]:
         """
         Get statistics about the call graph
         

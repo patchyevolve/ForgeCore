@@ -4,7 +4,7 @@ Validates symbol usage: function calls, variable references, undefined symbols
 """
 
 import re
-from typing import Set, List, Tuple, Dict, Optional
+from typing import Set, List, Tuple, Dict, Optional, Any
 
 
 class UndefinedSymbolError(Exception):
@@ -346,7 +346,7 @@ class SymbolValidator:
         content = re.sub(r"'(?:[^'\\]|\\.)*'", "''", content)
         return content
     
-    def get_symbol_info(self, symbol_name: str) -> List[Dict[str, any]]:
+    def get_symbol_info(self, symbol_name: str) -> List[Dict[str, Any]]:
         """
         Get information about a symbol
         
