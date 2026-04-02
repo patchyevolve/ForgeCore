@@ -31,32 +31,45 @@ class Critic:
         if use_llm:
             try:
                 self.llm_client = create_critic_client()
+                if self.llm_client and not self.llm_client.is_available():
+                    raise RuntimeError(self.llm_client.availability_error() or "Critic LLM is unavailable")
             except Exception as e:
                 print(f"Warning: Failed to initialize LLM critic: {e}")
                 self.use_llm = False
     
-    def review_intent(self, intent: PatchIntent, file_content: str, task: Optional[str] = None) -> Tuple[bool, str]:
+    def review_intent(self, intent: PatchIntent, context_manager, task: Optional[str] = None) -> Tuple[bool, str]:
         """
-        Review a proposed mutation before execution.
+        Review a proposed intent (possibly multi-file) before execution.
         
         Args:
             intent: The PatchIntent to review
-            file_content: Current content of target file
+            context_manager: Context manager to fetch file contents
             task: Optional task description
             
         Returns:
             (approved: bool, feedback: str)
         """
-        # normalize task to avoid passing None further
         task_str = task or ""
+        
+        # Collect context for all files in the intent
+        files_context = {}
+        for mutation in intent.mutations:
+            file_path = mutation.target_file
+            if file_path not in files_context:
+                try:
+                    content = context_manager.get_file_content(file_path)
+                    files_context[file_path] = content
+                except Exception:
+                    files_context[file_path] = "[New or inaccessible file]"
+
         if self.use_llm and self.llm_client:
             try:
-                return self._review_intent_llm(intent, file_content, task_str)
+                return self._review_intent_llm(intent, files_context, task_str)
             except Exception as e:
                 print(f"Warning: LLM review failed, using simulated: {e}")
-                return self._review_intent_simulated(intent, file_content, task_str)
+                return True, "Simulated approval (LLM failed)"
         else:
-            return self._review_intent_simulated(intent, file_content, task_str)
+            return True, "Simulated approval (LLM disabled)"
     
     def review_result(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
@@ -90,61 +103,44 @@ class Critic:
         """Simulated review - always approves."""
         return True, "Simulated approval"
     
-    def _review_intent_llm(self, intent: PatchIntent, file_content: str, task: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        LLM-based intent review using DeepSeek.
+    def _review_intent_llm(self, intent: PatchIntent, files_context: Dict[str, str], task_str: str) -> Tuple[bool, str]:
+        """LLM-based review of multiple mutations in an intent"""
         
-        Args:
-            intent: Proposed PatchIntent
-            file_content: Current file content
-            task: Optional task description
+        mutations_str = ""
+        for i, m in enumerate(intent.mutations, 1):
+            mutations_str += f"\nMutation {i}:\n"
+            mutations_str += f"- File: {m.target_file}\n"
+            mutations_str += f"- Operation: {m.operation.value}\n"
+            mutations_str += f"- Payload: {m.payload}\n"
             
-        Returns:
-            (approved: bool, feedback: str)
-        """
-        assert self.llm_client is not None, "LLM client must exist for LLM review"
-        task_str = task or ""
-        # Build system prompt
-        system_prompt = """You are a code review critic for ForgeCore.
-Review the proposed mutation for safety and correctness.
+        context_str = ""
+        for file, content in files_context.items():
+            context_str += f"\n--- {file} (Current) ---\n"
+            context_str += content[:500] + ("..." if len(content) > 500 else "") + "\n"
 
-REVIEW CRITERIA:
-1. Does this mutation accomplish the task?
-2. Is it safe (no undefined behavior, memory issues)?
-3. Does it respect tier restrictions (no tier2 modifications)?
-4. Is the scope appropriate (not too broad)?
+        prompt = f"""Review this multi-file code mutation intent.
+TASK: {task_str}
 
-RESPOND IN JSON:
-{
-  "approved": true/false,
-  "feedback": "Brief explanation",
-  "concerns": ["concern1", "concern2", ...]
-}"""
+PROPOSED MUTATIONS:
+{mutations_str}
 
-        # Build user prompt
-        user_prompt = f"""TASK: {task_str if task_str else 'Not specified'}
+CURRENT CONTEXT:
+{context_str}
 
-PROPOSED INTENT:
-- Operation: {intent.operation.value if intent.operation is not None else '<none>'}
-- Target File: {intent.target_file}
-- Payload: {intent.payload}
+Does this plan solve the task correctly and maintain architectural coherence?
+Check for:
+1. Missing imports or mismatched class/function arguments between files.
+2. Incomplete implementations or logical errors.
+3. Proper use of CREATE_FILE vs other operations.
 
-CURRENT FILE CONTENT (first 500 chars):
-{file_content[:500]}
-
-Review this mutation."""
-
-        # Get review from LLM
-        response = self.llm_client.generate_json(user_prompt, system_prompt)
-        
-        approved = response.get("approved", False)
-        feedback = response.get("feedback", "No feedback provided")
-        concerns = response.get("concerns", [])
-        
-        if concerns:
-            feedback += f"\nConcerns: {', '.join(concerns)}"
-        
-        return approved, feedback
+Respond with 'APPROVED' or 'REJECTED: [detailed feedback]'.
+If REJECTED, please provide a clear explanation and, if possible, the exact code snippet that should be used instead.
+"""
+        response = self.llm_client.generate(prompt)
+        if "APPROVED" in response.upper():
+            return True, "LLM Approved"
+        else:
+            return False, response.replace("REJECTED:", "").strip()
     
     def _review_result_llm(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
@@ -162,7 +158,7 @@ Review this mutation."""
         assert self.llm_client is not None, "LLM client must exist for LLM review"
         task_str = task or ""
         # Build system prompt
-        system_prompt = """You are a final code review critic for ForgeCore.
+        system_prompt = """You are a final code review critic for ForgeCore Graphical.
 Review the actual mutation result for correctness and quality.
 
 REVIEW CRITERIA:

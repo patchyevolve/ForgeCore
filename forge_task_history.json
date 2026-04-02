@@ -78,5 +78,469 @@
     "log_path": "logs\\session_20260306_013435.json",
     "project": "D:\\pro",
     "timestamp": "2026-03-06T01:48:32.229420"
+  },
+  {
+    "id": 11,
+    "description": "create a program that type out a random quote everytime we run it in c++",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260306_185922.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-06T19:00:05.160008"
+  },
+  {
+    "id": 12,
+    "description": "create a simple weather app in python",
+    "status": "completed",
+    "log_path": "logs\\session_20260309_150734.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-09T15:09:24.016249"
+  },
+  {
+    "id": 13,
+    "description": "create a calculator in c++",
+    "status": "completed",
+    "log_path": "logs\\session_20260310_110354.json",
+    "project": "D:\\pop",
+    "timestamp": "2026-03-10T11:05:48.115133"
+  },
+  {
+    "id": 14,
+    "description": "add a factorial function to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_230239.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:04:07.390122"
+  },
+  {
+    "id": 15,
+    "description": "create file factorial.py with factorial function",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_230417.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:05:17.348548"
+  },
+  {
+    "id": 16,
+    "description": "create factorial.py with factorial function",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_230915.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:10:18.901123"
+  },
+  {
+    "id": 17,
+    "description": "create factorial.py with factorial function",
+    "status": "completed",
+    "log_path": "logs\\session_20260312_231030.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:10:37.024983"
+  },
+  {
+    "id": 18,
+    "description": "create factorial.py with factorial function",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_231445.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:16:23.099865"
+  },
+  {
+    "id": 19,
+    "description": "create factorial.py with factorial function",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_231636.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:20:09.733603"
+  },
+  {
+    "id": 20,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_232311.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:24:13.204755"
+  },
+  {
+    "id": 21,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_232421.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:28:46.670224"
+  },
+  {
+    "id": 22,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_233209.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:32:16.126306"
+  },
+  {
+    "id": 23,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_233229.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:32:53.998249"
+  },
+  {
+    "id": 24,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_233321.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:33:27.641227"
+  },
+  {
+    "id": 25,
+    "description": "add a square function to factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_233645.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:38:10.136369"
+  },
+  {
+    "id": 26,
+    "description": "implement the factorial function in factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_234423.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:44:37.157977"
+  },
+  {
+    "id": 27,
+    "description": "implement the factorial function in factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_234441.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:45:36.762467"
+  },
+  {
+    "id": 28,
+    "description": "upgrade the factorial file to do calculation on graph basis and printing the factorial table for the number of terms inputed",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260312_235059.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-12T23:55:01.128127"
+  },
+  {
+    "id": 29,
+    "description": "implement the factorial function in factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260312_235634.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-12T23:56:46.176847"
+  },
+  {
+    "id": 30,
+    "description": "implement the factorial function in factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_000046.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:00:56.969326"
+  },
+  {
+    "id": 31,
+    "description": "implement the factorial function in factorial.py",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_000100.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:01:06.575537"
+  },
+  {
+    "id": 32,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_000432.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:04:46.110411"
+  },
+  {
+    "id": 33,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_000509.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:05:41.609829"
+  },
+  {
+    "id": 34,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_000609.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:06:19.933651"
+  },
+  {
+    "id": 35,
+    "description": "add a function to calculate square to factorial.py",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_000623.json",
+    "project": "D:/pp",
+    "timestamp": "2026-03-13T00:06:28.125936"
+  },
+  {
+    "id": 36,
+    "description": "Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001000.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:10:13.032474"
+  },
+  {
+    "id": 37,
+    "description": "Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001017.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:10:36.929923"
+  },
+  {
+    "id": 38,
+    "description": "Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001117.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:11:24.019756"
+  },
+  {
+    "id": 39,
+    "description": "Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001128.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:11:51.579942"
+  },
+  {
+    "id": 40,
+    "description": "TASK: Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001213.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:12:19.906700"
+  },
+  {
+    "id": 41,
+    "description": "TASK: Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001224.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:13:08.793013"
+  },
+  {
+    "id": 42,
+    "description": "TASK: Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_001344.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:14:04.595297"
+  },
+  {
+    "id": 43,
+    "description": "Create a mini terminal game. 1. In player.py, define a Player class with health and attack. 2. In enemy.py, define an Enemy class with health. 3. In main.py, import both and simulate a simple battle loop.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001515.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:15:32.277319"
+  },
+  {
+    "id": 44,
+    "description": "Create a mini terminal game. 1. In enemy.py, define an Enemy class with health. 2. In main.py, import Player from player.py and Enemy from enemy.py and simulate a simple battle loop.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001538.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:15:45.686609"
+  },
+  {
+    "id": 45,
+    "description": "Create a mini terminal game. 1. In main.py, import Player from player.py and Enemy from enemy.py and simulate a simple battle loop.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001552.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:15:58.912409"
+  },
+  {
+    "id": 46,
+    "description": "TASK: The game is crashing. Player and Enemy classes require arguments in __init__. Fix main.py to pass appropriate values (e.g. Player(100, 10), Enemy(50)) and ensure player has an attack method or the battle loop is corrected.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001624.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:16:31.886086"
+  },
+  {
+    "id": 47,
+    "description": "TASK: player.py and enemy.py need attack methods. player.attack(enemy) should reduce enemy health by player attack value. enemy.attack(player) should reduce player health by a fixed value (e.g. 5).",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001637.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:16:48.873051"
+  },
+  {
+    "id": 48,
+    "description": "TASK: player.py is missing the attack method. Add a method attack(self, enemy) that reduces enemy.health by self.attack. In enemy.py, ensure there is an attack(self, player) method. In main.py, ensure Player(100, 10) and Enemy(50) are initialized correctly and the battle loop works.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001719.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:17:27.679528"
+  },
+  {
+    "id": 49,
+    "description": "TASK: Critical bug in main.py. The player.attack(enemy) call is failing with TypeError: int object is not callable. This is because player.attack is being treated as an attribute (the attack value) instead of a method. Check player.py and ensure the attack value and attack method do not have the same name, or rename the attribute to self.attack_power.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001809.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:18:17.048929"
+  },
+  {
+    "id": 50,
+    "description": "TASK: player.py needs a working attack method. It should reduce enemy.health by self.attack_power. Currently it is a pass. Also ensure main.py is updated to pass arguments correctly to Player(attack_power, health).",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_001823.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:18:33.434545"
+  },
+  {
+    "id": 51,
+    "description": "TASK: 1. Overwrite player.py with a complete Player class including __init__(self, attack_power, health) and attack(self, enemy) method. 2. Overwrite main.py with a main() that initializes Player(10, 100) and Enemy(50) and runs the battle loop.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001839.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:18:45.946754"
+  },
+  {
+    "id": 52,
+    "description": "TASK: Update main.py to use the new Player constructor: Player(attack_power, health). Example: Player(10, 100).",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_001852.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:19:02.010446"
+  },
+  {
+    "id": 53,
+    "description": "TASK: Use CREATE_FILE to overwrite main.py with the proper battle loop code. Player takes (10, 100) and Enemy takes (50).",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_001918.json",
+    "project": "D:/game_test",
+    "timestamp": "2026-03-13T00:19:41.993904"
+  },
+  {
+    "id": 54,
+    "description": "TASK: Create a terminal-based RPG with 3 files: player.py (Player class with health/attack), enemy.py (Enemy class with health/attack), and main.py (Battle loop where they take turns until one dies). EVERYTHING MUST WORK IN ONE ITERATION.",
+    "status": "completed",
+    "log_path": "logs\\session_20260313_002712.json",
+    "project": "D:/game_test_final",
+    "timestamp": "2026-03-13T00:27:22.654297"
+  },
+  {
+    "id": 55,
+    "description": "TASK: Add a win condition message when the game ends in main.py.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_003052.json",
+    "project": "D:/game_test_final",
+    "timestamp": "2026-03-13T00:31:28.681101"
+  },
+  {
+    "id": 56,
+    "description": "TASK: Just list the files in the project.",
+    "status": "failed",
+    "log_path": "logs\\session_20260313_003229.json",
+    "project": "D:/game_test_final",
+    "timestamp": "2026-03-13T00:33:50.973584"
+  },
+  {
+    "id": 57,
+    "description": "create upgraded version of files in c++",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_004240.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-13T00:46:18.827485"
+  },
+  {
+    "id": 58,
+    "description": "create a updated verion in c++",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_004952.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-13T00:52:33.605198"
+  },
+  {
+    "id": 59,
+    "description": "create upgraded file with different name in cpp",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_005240.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-13T00:53:23.760524"
+  },
+  {
+    "id": 60,
+    "description": "create a updated verion in c++",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_005705.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-13T00:57:27.641915"
+  },
+  {
+    "id": 61,
+    "description": "create a updated verion in c++",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260313_010330.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-03-13T01:06:57.029187"
+  },
+  {
+    "id": 62,
+    "description": "make a scientific calculator in cpp",
+    "status": "failed",
+    "log_path": "logs\\session_20260403_000023.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-04-03T00:06:28.849414"
+  },
+  {
+    "id": 63,
+    "description": "create a scientific calculator in cpp",
+    "status": "failed",
+    "log_path": "logs\\session_20260403_001405.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-04-03T00:23:07.903786"
+  },
+  {
+    "id": 64,
+    "description": "create a scientific calculator in cpp",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260403_004546.json",
+    "project": "D:\\op",
+    "timestamp": "2026-04-03T00:50:39.884938"
+  },
+  {
+    "id": 65,
+    "description": "y",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260403_011627.json",
+    "project": "D:\\op",
+    "timestamp": "2026-04-03T01:18:39.196891"
+  },
+  {
+    "id": 66,
+    "description": "Create file main.cpp with a complete scientific calculator in C++. It should be a console app with a menu for add, subtract, multiply, divide, power, square root, sine, cosine, tangent, logarithm, natural log, and exit. Use clean functions, input validation, divide-by-zero handling, invalid domain handling, and clear formatted output.",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260403_012308.json",
+    "project": "D:\\op",
+    "timestamp": "2026-04-03T01:31:49.262677"
+  },
+  {
+    "id": 67,
+    "description": "Create file main.cpp with a complete scientific calculator in C++. It should be a console app with a menu for add, subtract, multiply, divide, power, square root, sine, cosine, tangent, logarithm, natural log, and exit. Use clean functions, input validation, divide-by-zero handling, invalid domain handling, and clear formatted output.",
+    "status": "completed",
+    "log_path": "logs\\session_20260403_014111.json",
+    "project": "D:\\\\op",
+    "timestamp": "2026-04-03T01:41:11.601082"
+  },
+  {
+    "id": 68,
+    "description": "create a scientif calculator in python only",
+    "status": "cancelled",
+    "log_path": "logs\\session_20260403_020330.json",
+    "project": "D:\\pp",
+    "timestamp": "2026-04-03T02:08:42.064308"
   }
 ]

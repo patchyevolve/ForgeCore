@@ -17,6 +17,7 @@ class ForgeDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT UNIQUE,
                 mtime REAL,
+                semantic_context TEXT,
                 last_indexed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -60,9 +61,15 @@ class ForgeDatabase:
         # Check if mtime exists in files table
         cursor.execute("PRAGMA table_info(files)")
         columns = [row[1] for row in cursor.fetchall()]
+        
         if 'mtime' not in columns:
             print("[INFO] Migrating database: adding mtime column to files table")
             cursor.execute("ALTER TABLE files ADD COLUMN mtime REAL")
+            self.conn.commit()
+
+        if 'semantic_context' not in columns:
+            print("[INFO] Migrating database: adding semantic_context column to files table")
+            cursor.execute("ALTER TABLE files ADD COLUMN semantic_context TEXT")
             self.conn.commit()
 
     def get_symbol_definition(self, symbol_name):

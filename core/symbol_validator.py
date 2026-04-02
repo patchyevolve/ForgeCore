@@ -38,6 +38,32 @@ class SymbolValidator:
         'const_cast', 'reinterpret_cast', 'operator', 'friend', 'typedef',
         'explicit', 'inline', 'extern', 'register', 'asm', 'export'
     }
+
+    # Python keywords to exclude from symbol checks
+    PYTHON_KEYWORDS = {
+        'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
+        'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+        'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda',
+        'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'
+    }
+
+    # Python built-ins to exclude from symbol checks
+    PYTHON_BUILTINS = {
+        'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
+        'callable', 'chr', 'classmethod', 'compile', 'complex', 'delattr', 'dict', 'dir',
+        'divmod', 'enumerate', 'eval', 'exec', 'filter', 'float', 'format', 'frozenset',
+        'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int',
+        'isinstance', 'issubclass', 'iter', 'len', 'list', 'locals', 'map', 'max', 'memoryview',
+        'min', 'next', 'object', 'oct', 'open', 'ord', 'pow', 'print', 'property', 'range',
+        'repr', 'reversed', 'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod',
+        'str', 'sum', 'super', 'tuple', 'type', 'vars', 'zip', '__import__',
+        # Exceptions
+        'BaseException', 'Exception', 'ArithmeticError', 'AssertionError', 'AttributeError',
+        'BufferError', 'EOFError', 'ImportError', 'IndexError', 'KeyError', 'MemoryError',
+        'NameError', 'NotImplementedError', 'OSError', 'OverflowError', 'RecursionError',
+        'RuntimeError', 'StopIteration', 'SyntaxError', 'SystemError', 'TypeError',
+        'ValueError', 'ZeroDivisionError', 'FileExistsError', 'FileNotFoundError'
+    }
     
     def __init__(self, indexer):
         self.indexer = indexer
@@ -88,19 +114,19 @@ class SymbolValidator:
             # Get all symbols defined in project
             defined_symbols = self._get_all_defined_symbols()
             
-            # Get symbols accessible from this file (via includes)
+            # Get symbols accessible from this file (via includes/imports)
             accessible_symbols = self._get_accessible_symbols(file_path)
             
             # Check for undefined symbols
             for symbol in used_symbols:
-                if symbol in self.CPP_KEYWORDS:
+                if symbol in self.CPP_KEYWORDS or symbol in self.PYTHON_KEYWORDS or symbol in self.PYTHON_BUILTINS:
                     continue
                 
                 # Check if symbol is defined anywhere
                 if symbol not in defined_symbols:
                     # Could be from standard library or external
                     # Only flag if it looks like a user-defined symbol
-                    if self._looks_like_user_symbol(symbol):
+                    if self._looks_like_user_symbol(symbol, file_path):
                         issues.append(
                             f"Undefined symbol '{symbol}' in {file_path}"
                         )
@@ -156,17 +182,23 @@ class SymbolValidator:
             with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
-            # Remove comments
-            content = self._remove_comments(content)
+            # Remove comments based on file type
+            if file_path.endswith('.py'):
+                content = self._remove_python_comments(content)
+            else:
+                content = self._remove_cpp_comments(content)
             
             # Remove string literals
             content = self._remove_strings(content)
             
-            # Extract function calls
-            for match in self.FUNCTION_CALL_PATTERN.finditer(content):
+            # Extract function calls and variable usages
+            # We use a combined approach for better coverage
+            for match in self.VARIABLE_USAGE_PATTERN.finditer(content):
                 symbol = match.group(1)
-                if symbol and not symbol.startswith('_'):
-                    used_symbols.add(symbol)
+                if symbol and not symbol.isdigit() and len(symbol) > 1:
+                    # Basic filtering for common noise
+                    if not symbol.startswith('_'):
+                        used_symbols.add(symbol)
             
         except Exception as e:
             # File read error - skip
@@ -191,7 +223,7 @@ class SymbolValidator:
     
     def _get_accessible_symbols(self, file_path: str) -> Set[str]:
         """
-        Get symbols accessible from a file (defined in file or included files)
+        Get symbols accessible from a file (defined in file or included/imported files)
         
         Returns:
             Set of accessible symbol names
@@ -206,14 +238,41 @@ class SymbolValidator:
         )
         accessible.update(row[0] for row in cursor.fetchall())
         
-        # Symbols from included files
-        includes = self._get_file_includes_recursive(file_path)
-        for included_file in includes:
-            cursor.execute(
-                "SELECT name FROM symbols WHERE file = ?",
-                (included_file,)
-            )
-            accessible.update(row[0] for row in cursor.fetchall())
+        # Symbols from included/imported files
+        cursor.execute(
+            "SELECT included_file FROM includes WHERE source_file = ?",
+            (file_path,)
+        )
+        
+        for row in cursor.fetchall():
+            included = row[0]
+            
+            # For Python from-imports, we store "module.symbol"
+            if "." in included and file_path.endswith('.py'):
+                module, symbol = included.rsplit(".", 1)
+                accessible.add(symbol)
+                accessible.add(module)
+            else:
+                # Try to resolve to actual file
+                resolved = self._resolve_include(included)
+                if resolved:
+                    cursor.execute(
+                        "SELECT name FROM symbols WHERE file = ?",
+                        (resolved,)
+                    )
+                    accessible.update(row[0] for row in cursor.fetchall())
+                    
+                    # Also handle recursive includes
+                    includes = self._get_file_includes_recursive(resolved)
+                    for inc_file in includes:
+                        cursor.execute(
+                            "SELECT name FROM symbols WHERE file = ?",
+                            (inc_file,)
+                        )
+                        accessible.update(row[0] for row in cursor.fetchall())
+                else:
+                    # Could be a standard library module or external package
+                    accessible.add(included)
         
         return accessible
     
@@ -296,7 +355,7 @@ class SymbolValidator:
         
         return all_usages
     
-    def _looks_like_user_symbol(self, symbol: str) -> bool:
+    def _looks_like_user_symbol(self, symbol: str, file_path: str) -> bool:
         """
         Check if symbol looks like a user-defined symbol
         (vs standard library or compiler intrinsic)
@@ -304,6 +363,16 @@ class SymbolValidator:
         Returns:
             True if likely user-defined
         """
+        if file_path.endswith('.py'):
+            # Python standard modules often used
+            py_std_modules = {
+                'os', 'sys', 're', 'json', 'datetime', 'time', 'math', 'hashlib',
+                'collections', 'typing', 'dataclasses', 'abc', 'enum', 'threading',
+                'subprocess', 'shutil', 'glob', 'argparse', 'logging'
+            }
+            if symbol in py_std_modules:
+                return False
+                
         # Standard library prefixes
         std_prefixes = ['std', 'std_', '__', '_']
         
@@ -330,7 +399,16 @@ class SymbolValidator:
         
         return True
     
-    def _remove_comments(self, content: str) -> str:
+    def _remove_python_comments(self, content: str) -> str:
+        """Remove Python comments and docstrings"""
+        # Remove single-line comments
+        content = re.sub(r'#.*?$', '', content, flags=re.MULTILINE)
+        # Remove triple-quoted strings (docstrings)
+        content = re.sub(r'"""(.*?)"""', '', content, flags=re.DOTALL)
+        content = re.sub(r"'''(.*?)'''", '', content, flags=re.DOTALL)
+        return content
+
+    def _remove_cpp_comments(self, content: str) -> str:
         """Remove C++ comments from content"""
         # Remove single-line comments
         content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)

@@ -66,6 +66,7 @@ def test_online_backend_and_fallback():
 
     # set fallback env var and verify both clients fallback
     os.environ["LLM_FALLBACK_LOCAL"] = "true"
+    os.environ["FORGECORE_REMOTE_HEALTHCHECK"] = "true"
     try:
         planner = create_planner_client(path)
         critic = create_critic_client(path)
@@ -79,8 +80,9 @@ def test_online_backend_and_fallback():
     finally:
         requests.post = original_post
         del os.environ["LLM_FALLBACK_LOCAL"]
+        os.environ.pop("FORGECORE_REMOTE_HEALTHCHECK", None)
 
-    # now test that online clients actually attempt a network call during creation
+    # now test that online clients do not eagerly hit the network during creation
     call_count = {'count': 0}
 
     class DummyResponse:
@@ -109,14 +111,23 @@ def test_online_backend_and_fallback():
         planner2 = create_planner_client(path)
         critic2 = create_critic_client(path)
         print(f"network calls during creation: {call_count['count']}")
-        if call_count['count'] >= 2:
-            print("PASS online clients attempted network")
-            return True
-        else:
-            print("FAIL online clients did not hit network")
+        if call_count['count'] != 0:
+            print("FAIL online clients should not eagerly hit network")
             return False
+        print("PASS online clients skipped eager network checks")
+
+        os.environ["FORGECORE_REMOTE_HEALTHCHECK"] = "true"
+        planner3 = create_planner_client(path)
+        critic3 = create_critic_client(path)
+        print(f"network calls with healthcheck enabled: {call_count['count']}")
+        if call_count['count'] >= 2:
+            print("PASS optional healthcheck triggers network calls")
+            return True
+        print("FAIL optional healthcheck did not hit network")
+        return False
     finally:
         del os.environ["HF_API_KEY"]
+        os.environ.pop("FORGECORE_REMOTE_HEALTHCHECK", None)
 
 
 def main():

@@ -104,6 +104,7 @@ class ForgeREPL:
         print("\nSystem Commands:")
         print("  help                   Show this help")
         print("  status                 Show system status")
+        print("  diagnose               Run project-wide diagnosis")
         print("  history                Show task history")
         print("  agents                 Show agent stack (planner / critic)")
         print("  timeline               Show high-level state timeline for this session")
@@ -254,6 +255,16 @@ class ForgeREPL:
             print(f"\nError reading history: {e}")
         print("="*70 + "\n")
     
+    def diagnose_project(self):
+        """Run project-wide diagnosis"""
+        try:
+            from tools.project_diagnoser import ProjectDiagnoser
+            diagnoser = ProjectDiagnoser(self.project_path, self.logger)
+            results = diagnoser.run_diagnosis()
+            diagnoser.print_report(results)
+        except Exception as e:
+            print(f"\n[ERROR] Diagnosis failed: {e}")
+
     def list_files(self):
         """List files in project"""
         print("\n" + "="*70)
@@ -512,6 +523,9 @@ class ForgeREPL:
                 
                 elif command == 'status':
                     self.show_status()
+                
+                elif command == 'diagnose':
+                    self.diagnose_project()
                 
                 elif command == 'agents':
                     self.show_agents()

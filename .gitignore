@@ -48,3 +48,15 @@ test_forge_project/
 
 # Secrets
 config/secrets.json
+config/llm_config.json
+.hypothesis/constants/8a3f0ff87ce01b08
+.hypothesis/constants/66fc774d0227fb4b
+.hypothesis/constants/82006d59dbfd9f8c
+.hypothesis/constants/997199f9ee7b633b
+.hypothesis/constants/a4fe7f0dcd22228d
+.hypothesis/constants/d8f766a2fb1f6e6e
+.hypothesis/constants/db80c78aeeb11455
+.kiro/specs/project-clean-overhaul/.config.kiro
+.kiro/specs/project-clean-overhaul/tasks.md
+.kiro/specs/project-clean-overhaul/requirements.md
+.kiro/specs/project-clean-overhaul/design.md

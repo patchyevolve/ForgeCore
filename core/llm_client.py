@@ -10,14 +10,90 @@ runtime behaviour may be overridden via environment variables.
 import json
 import threading
 import os
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
-
-# third-party dependencies
-import ollama
-from json_repair import repair_json
+import time
 import requests
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, Callable
+try:
+    import ollama
+except ImportError:
+    ollama = None
 
+try:
+    from json_repair import repair_json
+except ImportError:
+    repair_json = None
+
+# Global state for rate limiting (shared across all client instances)
+_last_request_time = 0.0
+_MIN_REQUEST_INTERVAL = 20.0  # Conservative 20 seconds (3 RPM) for Groq Free Tier safety
+_cooldown_lock = threading.Lock()
+
+
+def _remote_healthcheck_enabled() -> bool:
+    return os.getenv("FORGECORE_REMOTE_HEALTHCHECK", "false").lower() == "true"
+
+def _post_with_retry(
+    url: str,
+    headers: Dict[str, str],
+    json_data: Dict[str, Any],
+    timeout: int = 60,
+    max_retries: int = 3,
+    initial_delay: float = 20.0
+) -> requests.Response:
+    """Helper for making POST requests with exponential backoff and global cooldown"""
+    global _last_request_time
+    
+    for attempt in range(max_retries):
+        # Hold the lock DURING the entire request process to prevent ANY concurrent requests
+        with _cooldown_lock:
+            # 1. Enforce cooldown since the LAST request finished
+            now = time.time()
+            time_since_last = now - _last_request_time
+            if time_since_last < _MIN_REQUEST_INTERVAL:
+                sleep_time = _MIN_REQUEST_INTERVAL - time_since_last
+                if sleep_time > 0.5:
+                    print(f"[INFO] Global cooldown active. Waiting {sleep_time:.1f}s to ensure one-by-one requests...")
+                time.sleep(sleep_time)
+            
+            # 2. Perform the actual request while STILL holding the lock
+            # This ensures that no other thread can even start its wait until this one returns
+            try:
+                print(f"[INFO] Sending request to LLM...")
+                resp = requests.post(url, headers=headers, json=json_data, timeout=timeout)
+                
+                # 3. Update the last finished time BEFORE releasing the lock
+                _last_request_time = time.time()
+                
+                if resp.status_code == 429:
+                    if attempt < max_retries - 1:
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                delay = max(float(retry_after), initial_delay)
+                            except ValueError:
+                                delay = initial_delay * (2 ** attempt)
+                        else:
+                            delay = initial_delay * (2 ** attempt)
+                        print(f"[WARN] Rate limited (429). Retrying in {delay}s... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        print(f"[ERROR] Max retries exceeded for 429 rate limit.")
+                
+                resp.raise_for_status()
+                return resp
+                
+            except requests.exceptions.HTTPError as e:
+                if resp.status_code != 429 or attempt == max_retries - 1:
+                    raise e
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    time.sleep(initial_delay)
+                    continue
+                raise e
+    
+    raise RuntimeError(f"Request failed after {max_retries} attempts")
 
 def _load_secrets(secrets_path: str = "config/secrets.json") -> Dict[str, str]:
     """Load secrets from file if it exists."""
@@ -29,7 +105,6 @@ def _load_secrets(secrets_path: str = "config/secrets.json") -> Dict[str, str]:
             return {}
     return {}
 
-
 class TimeoutError(Exception):
     """Raised when LLM call times out"""
     pass
@@ -40,6 +115,12 @@ class BaseLLMClient(ABC):
     
     Subclasses must implement :meth:`generate` and :meth:`generate_json`.
     """
+
+    def is_available(self) -> bool:
+        return True
+
+    def availability_error(self) -> Optional[str]:
+        return None
 
     @abstractmethod
     def generate(self, prompt: str, system: Optional[str] = None) -> str:
@@ -67,6 +148,14 @@ class OllamaClient(BaseLLMClient):
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+
+    def is_available(self) -> bool:
+        return ollama is not None
+
+    def availability_error(self) -> Optional[str]:
+        if self.is_available():
+            return None
+        return "Ollama Python package is not installed. Install dependencies or switch config/llm_config.json to an online backend."
     
     def generate(self, prompt: str, system: Optional[str] = None) -> str:
         """
@@ -83,6 +172,9 @@ class OllamaClient(BaseLLMClient):
             TimeoutError: If generation exceeds timeout
             RuntimeError: If generation fails
         """
+        if not self.is_available():
+            raise RuntimeError(self.availability_error() or "Ollama is unavailable")
+
         messages = []
         
         if system:
@@ -163,7 +255,8 @@ class OllamaClient(BaseLLMClient):
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Try to repair malformed JSON
+            if repair_json is None:
+                raise ValueError(f"Failed to parse JSON from LLM output.\nOutput: {text[:200]}")
             try:
                 repaired = repair_json(text)
                 return json.loads(repaired)
@@ -193,13 +286,14 @@ class OnlineLLMClient(BaseLLMClient):
             raise RuntimeError("No API token provided for online LLM")
         headers = {"Authorization": f"Bearer {self.api_token}"}
         data = {"inputs": prompt, "parameters": {"temperature": self.temperature}}
-        resp = requests.post(
+        
+        resp = _post_with_retry(
             f"{self.endpoint}/{self.model}",
             headers=headers,
-            json=data,
-            timeout=self.timeout,
+            json_data=data,
+            timeout=self.timeout
         )
-        resp.raise_for_status()
+        
         payload = resp.json()
         if isinstance(payload, dict):
             return payload.get("generated_text", payload.get("text", ""))
@@ -210,6 +304,59 @@ class OnlineLLMClient(BaseLLMClient):
     def generate(self, prompt: str, system: Optional[str] = None) -> str:
         full_prompt = prompt if system is None else f"{system}\n\n{prompt}"
         return self._post(full_prompt)
+
+    def generate_json(self, prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
+        json_prompt = f"{prompt}\n\nRESPOND ONLY WITH VALID JSON. NO EXPLANATIONS."
+        text = self.generate(json_prompt, system)
+        return _parse_json_response(text)
+
+
+class OpenAICompatibleClient(BaseLLMClient):
+    """Client for interacting with any OpenAI-compatible API (like Big Pickle/OpenCode)."""
+
+    def __init__(
+        self,
+        model: str,
+        api_token: Optional[str],
+        endpoint: str,
+        temperature: float = 0.1,
+        timeout: int = 60
+    ):
+        self.model = model
+        self.api_token = api_token
+        self.endpoint = endpoint
+        self.temperature = temperature
+        self.timeout = timeout
+
+    def generate(self, prompt: str, system: Optional[str] = None) -> str:
+        if not self.api_token:
+            raise RuntimeError("No API token provided for OpenAI-compatible client")
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json"
+        }
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature
+        }
+        
+        resp = _post_with_retry(
+            self.endpoint,
+            headers=headers,
+            json_data=data,
+            timeout=self.timeout
+        )
+        
+        payload = resp.json()
+        return payload["choices"][0]["message"]["content"]
 
     def generate_json(self, prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
         json_prompt = f"{prompt}\n\nRESPOND ONLY WITH VALID JSON. NO EXPLANATIONS."
@@ -254,13 +401,13 @@ class GroqClient(BaseLLMClient):
             "temperature": self.temperature
         }
         
-        resp = requests.post(
+        resp = _post_with_retry(
             self.endpoint,
             headers=headers,
-            json=data,
-            timeout=self.timeout,
+            json_data=data,
+            timeout=self.timeout
         )
-        resp.raise_for_status()
+        
         payload = resp.json()
         return payload["choices"][0]["message"]["content"]
 
@@ -281,6 +428,8 @@ def _parse_json_response(text: str) -> Dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        if repair_json is None:
+            raise ValueError(f"Failed to parse JSON from LLM output.\nOutput: {text[:200]}")
         try:
             repaired = repair_json(text)
             return json.loads(repaired)
@@ -328,6 +477,15 @@ def _create_client(role_cfg: dict) -> BaseLLMClient:
             temperature=role_cfg["temperature"],
             timeout=role_cfg["timeout"],
         )
+    elif backend == "openai-compatible":
+        token = os.getenv("OPENAI_COMPATIBLE_API_KEY") or secrets.get("OPENAI_COMPATIBLE_API_KEY")
+        return OpenAICompatibleClient(
+            model=role_cfg["model"],
+            api_token=token,
+            endpoint=role_cfg["endpoint"],
+            temperature=role_cfg["temperature"],
+            timeout=role_cfg["timeout"],
+        )
     # default to local Ollama client
     return OllamaClient(
         model=role_cfg["model"],
@@ -345,6 +503,7 @@ def _get_fallback_model(model_name: str) -> str:
         "qwen/qwen3-32b": "qwen2.5-coder:7b-instruct",
         "meta-llama/llama-4-scout-17b-16e-instruct": "qwen2.5-coder:7b-instruct",
         "deepseek-ai/deepseek-coder-6.7b-instruct": "deepseek-coder:6.7b-instruct",
+        "deepseek-coder:6.7b-instruct": "deepseek-coder:6.7b-instruct",
         "deepseek-coder-6.7b-instruct": "deepseek-coder:6.7b-instruct",
         "llama-3.3-70b-versatile": "deepseek-coder:6.7b-instruct",
         "openai/gpt-oss-120b": "deepseek-coder:6.7b-instruct"
@@ -362,26 +521,30 @@ def create_planner_client(config_path: str = "config/llm_config.json") -> BaseLL
     """
     config = load_config(config_path)
     planner_config = config["planner"]
+    backend = planner_config.get("backend", "local")
     try:
         client = _create_client(planner_config)
-        # If this is an online client, attempt a tiny dummy call to verify
-        # connectivity. Use a short timeout (5s) for this check to avoid hangs.
-        if isinstance(client, OnlineLLMClient):
+        # Optional remote connectivity check. Disabled by default to avoid
+        # burning an extra request before the first real planner call.
+        if backend in ["online", "groq", "openai-compatible"] and _remote_healthcheck_enabled():
             try:
-                # Override timeout temporarily for the connectivity check
-                orig_timeout = client.timeout
-                client.timeout = 5
+                orig_timeout = getattr(client, 'timeout', 60)
+                if hasattr(client, 'timeout'):
+                    client.timeout = 5
                 try:
                     client.generate("ping")
                 finally:
-                    client.timeout = orig_timeout
-            except Exception:
+                    if hasattr(client, 'timeout'):
+                        client.timeout = orig_timeout
+            except Exception as e:
+                print(f"Remote LLM check failed for {backend}: {e}. Falling back to local...")
                 raise
         return client
     except Exception:
         if os.getenv("LLM_FALLBACK_LOCAL", "true").lower() == "true":
             # fallback to a minimal local model to ensure functionality
             fallback_model = _get_fallback_model(planner_config.get("model", ""))
+            print(f"Falling back to local model: {fallback_model}")
             return OllamaClient(model=fallback_model)
         raise
 
@@ -392,22 +555,26 @@ def create_critic_client(config_path: str = "config/llm_config.json") -> BaseLLM
     """
     config = load_config(config_path)
     critic_config = config["critic"]
+    backend = critic_config.get("backend", "local")
     try:
         client = _create_client(critic_config)
-        if isinstance(client, OnlineLLMClient):
+        if backend in ["online", "groq", "openai-compatible"] and _remote_healthcheck_enabled():
             try:
-                # Override timeout temporarily for the connectivity check
-                orig_timeout = client.timeout
-                client.timeout = 5
+                orig_timeout = getattr(client, 'timeout', 60)
+                if hasattr(client, 'timeout'):
+                    client.timeout = 5
                 try:
                     client.generate("ping")
                 finally:
-                    client.timeout = orig_timeout
-            except Exception:
+                    if hasattr(client, 'timeout'):
+                        client.timeout = orig_timeout
+            except Exception as e:
+                print(f"Remote Critic check failed for {backend}: {e}. Falling back to local...")
                 raise
         return client
     except Exception:
         if os.getenv("LLM_FALLBACK_LOCAL", "true").lower() == "true":
             fallback_model = _get_fallback_model(critic_config.get("model", ""))
+            print(f"Falling back to local model for Critic: {fallback_model}")
             return OllamaClient(model=fallback_model)
         raise

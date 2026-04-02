@@ -14,6 +14,7 @@ sys.path.insert(0, PARENT_DIR)
 TEST_FILES = sorted([
     os.path.basename(f) for f in glob.glob(os.path.join(TEST_DIR, "test_*.py"))
 ])
+TEST_FILES.append("test_overwrite_validation.py")
 
 def run_test(test_file):
     """Run a single test file"""
@@ -68,7 +69,7 @@ def cleanup_between_tests():
 
 def main():
     print("\n" + "#"*70)
-    print("# FORGECORE COMPREHENSIVE TEST SUITE")
+    print("# FORGECORE GRAPHICAL COMPREHENSIVE TEST SUITE")
     print("#"*70)
     print(f"\nRunning {len(TEST_FILES)} test suites...\n")
     

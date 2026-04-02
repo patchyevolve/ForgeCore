@@ -1,12 +1,28 @@
-# ForgeCore
+# ForgeCore Graphical
 
-**Semi-Autonomous AI Code Generation System**
+**ForgeCore Graphical** is an interactive TUI (Terminal User Interface) app and CLI tool that uses dual LLM agents (Qwen 2.5 Coder + DeepSeek Coder) to generate, modify, and validate code with 22 safety layers.
 
-ForgeCore is an interactive CLI tool that uses dual LLM agents (Qwen 2.5 Coder + DeepSeek Coder) to generate, modify, and validate code with 22 safety layers.
+## 🚀 Quick Start
+
+### 1. Interactive Mode (Full App Experience)
+Run the professional TUI app:
+```bash
+python tui.py
+```
+Or use the shortcut:
+```bash
+python forge.py
+```
+
+### 2. Single Task Mode (CLI)
+Execute a specific task directly:
+```bash
+python tui.py task "Add a factorial function to math_utils.py"
+```
 
 ## Features
-
 - 🤖 **Dual-Agent System**: Planner (Qwen) + Critic (DeepSeek) work together
+- 🧠 **Advanced Reasoning**: Full "Thinking" and "Planning" phases before code is generated
 - 🔒 **22 Safety Layers**: Tier enforcement, symbol validation, call graph analysis, etc.
 - 🌍 **Language-Agnostic**: C++, Python, JavaScript, TypeScript, Rust, Go, Java, C#
 - 💬 **Interactive CLI**: Start once, run multiple tasks

@@ -1,235 +1,156 @@
-﻿"""Test planner integration with controller"""
+"""Integration tests for planner and critic coordination."""
+
+import os
+import sys
+import shutil
+import tempfile
+import unittest
+from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.controller import Controller
-from core.logger import Logger
-import json
-import time
+from core.patch_intent import PatchIntent, Operation
 
-TARGET_PROJECT_PATH = r"D:\codeWorks\graphicstics\graphicstuff"
 
-class MockBuild:
-    def __init__(self, path):
-        pass
+class SuccessfulBuild:
     def run_build(self):
         return {"exit_code": 0, "stdout": "", "stderr": ""}
 
-def test_planner_simple_task():
-    """Test planner with simple task"""
-    print("\n" + "="*60)
-    print("TEST 1: Planner Simple Task")
-    print("="*60)
-    
-    logger = Logger()
-    controller = Controller(TARGET_PROJECT_PATH, logger)
-    controller.builder = MockBuild(TARGET_PROJECT_PATH)
-    
-    # Use unique name to avoid duplicates
-    unique_name = f"planner_test_{int(time.time())}"
-    task = f"Add function {unique_name} in main.cpp"
-    
-    print(f"Task: {task}")
-    result = controller.execute_task(task)
-    print(f"\nResult: {result}")
-    
-    # Check log for planner events
-    with open(logger.log_path, 'r') as f:
-        logs = json.load(f)
-    
-    planner_events = [e for e in logs if 'PLANNER' in e['event']]
-    
-    print(f"\n{'='*60}")
-    if planner_events:
-        print("PASS PLANNER EVENTS FOUND")
-        for event in planner_events:
-            print(f"  {event['event']}: {event.get('details', {})}")
-    else:
-        print("FAIL NO PLANNER EVENTS")
-    
-    if "completed successfully" in result.lower():
-        print("\nPASS PASS - Task completed via planner")
-        return True
-    else:
-        print(f"\nFAIL FAIL - Task failed: {result}")
-        return False
 
-def test_planner_refinement():
-    """Test planner refinement across iterations"""
-    print("\n" + "="*60)
-    print("TEST 2: Planner Refinement (Simulated)")
-    print("="*60)
-    
-    logger = Logger()
-    controller = Controller(TARGET_PROJECT_PATH, logger)
-    
-    # Use failing build to trigger refinement
-    class MockFailingBuild:
-        def __init__(self):
-            self.call_count = 0
-        
-        def run_build(self):
-            self.call_count += 1
-            if self.call_count == 1:
-                # First iteration fails
-                return {
-                    "exit_code": 1,
-                    "stdout": "",
-                    "stderr": "main.cpp(10): error: undefined symbol 'missing_func'"
-                }
-            else:
-                # Second iteration succeeds
-                return {"exit_code": 0, "stdout": "", "stderr": ""}
-    
-    controller.builder = MockFailingBuild()
-    
-    unique_name = f"refine_test_{int(time.time())}"
-    task = f"Add function {unique_name} in main.cpp"
-    
-    print(f"Task: {task}")
-    print("Build will fail once, then succeed...")
-    
-    result = controller.execute_task(task)
-    print(f"\nResult: {result}")
-    print(f"Iterations: {controller.current_iteration}")
-    
-    # Check log for refinement
-    with open(logger.log_path, 'r') as f:
-        logs = json.load(f)
-    
-    refining_events = [e for e in logs if 'REFINING' in e['event']]
-    
-    print(f"\n{'='*60}")
-    if refining_events:
-        print("PASS REFINEMENT DETECTED")
-        for event in refining_events:
-            print(f"  {event['event']}: {event.get('details', {})}")
-    
-    if controller.current_iteration > 1:
-        print(f"\nPASS PASS - Planner refined across {controller.current_iteration} iterations")
-        return True
-    else:
-        print("\nWARN  Only 1 iteration (expected multi-iteration)")
-        return False
+class RecordingPlanner:
+    def __init__(self, target_file, content):
+        self.target_file = target_file
+        self.content = content
+        self.context_manager = object()
+        self.calls = []
 
-def test_planner_append_task():
-    """Test planner with append operation"""
-    print("\n" + "="*60)
-    print("TEST 3: Planner Append Task")
-    print("="*60)
-    
-    logger = Logger()
-    controller = Controller(TARGET_PROJECT_PATH, logger)
-    controller.builder = MockBuild(TARGET_PROJECT_PATH)
-    
-    task = "Append to main.cpp: // Planner integration test comment"
-    
-    print(f"Task: {task}")
-    result = controller.execute_task(task)
-    print(f"\nResult: {result}")
-    
-    if "completed successfully" in result.lower():
-        print("\nPASS PASS - Append task completed")
-        return True
-    else:
-        print(f"\nFAIL FAIL - Task failed: {result}")
-        return False
+    def generate_intent(self, task_description, error_context=None, iteration=1, previous_intent=None):
+        self.calls.append(
+            {
+                "task_description": task_description,
+                "error_context": error_context,
+                "iteration": iteration,
+                "previous_intent": previous_intent,
+            }
+        )
+        return PatchIntent.single_file(
+            target_file=self.target_file,
+            operation=Operation.CREATE_FILE,
+            payload={"content": self.content},
+            description=f"Create {self.target_file}",
+        )
 
-def test_backward_compatibility():
-    """Test that execute_patch_intent still works"""
-    print("\n" + "="*60)
-    print("TEST 4: Backward Compatibility")
-    print("="*60)
-    
-    from core.patch_intent import PatchIntent, Operation
-    
-    logger = Logger()
-    controller = Controller(TARGET_PROJECT_PATH, logger)
-    controller.builder = MockBuild(TARGET_PROJECT_PATH)
-    
-    unique_name = f"compat_test_{int(time.time())}"
-    
-    intent = PatchIntent(
-        operation=Operation.ADD_FUNCTION_STUB,
-        target_file="main.cpp",
-        payload={"name": unique_name}
-    )
-    
-    print(f"Using execute_patch_intent (old API)")
-    result = controller.execute_patch_intent(intent)
-    print(f"\nResult: {result}")
-    
-    if "succced" in result:
-        print("\nPASS PASS - Old API still works")
-        return True
-    else:
-        print(f"\nFAIL FAIL - Old API broken: {result}")
-        return False
 
-def main():
-    print("\n" + "#"*60)
-    print("# PLANNER INTEGRATION TEST SUITE")
-    print("#"*60)
-    
-    results = {}
-    
-    try:
-        results['Simple Task'] = test_planner_simple_task()
-    except Exception as e:
-        print(f"\nFAIL Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        results['Simple Task'] = False
-    
-    try:
-        results['Refinement'] = test_planner_refinement()
-    except Exception as e:
-        print(f"\nFAIL Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        results['Refinement'] = False
-    
-    try:
-        results['Append Task'] = test_planner_append_task()
-    except Exception as e:
-        print(f"\nFAIL Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        results['Append Task'] = False
-    
-    try:
-        results['Backward Compat'] = test_backward_compatibility()
-    except Exception as e:
-        print(f"\nFAIL Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        results['Backward Compat'] = False
-    
-    # Summary
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
-    
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    
-    for test_name, success in results.items():
-        status = "PASS PASS" if success else "FAIL FAIL"
-        print(f"{status} - {test_name}")
-    
-    print(f"\nTotal: {passed}/{total} tests passed")
-    
-    if all(results.values()):
-        print("\nOK All planner integration tests passed!")
-        print("   • Planner generates intents from tasks")
-        print("   • Planner refines across iterations")
-        print("   • Multiple operation types supported")
-        print("   • Backward compatibility maintained")
-    
-    print("#"*60)
-    
-    return all(results.values())
+class RecordingCritic:
+    def __init__(self, project_path, target_file, approve_intent=True):
+        self.project_path = project_path
+        self.target_file = target_file
+        self.approve_intent = approve_intent
+        self.intent_reviews = []
+        self.result_reviews = []
+        self.call_order = []
+
+    def review_intent(self, intent, context_manager, task_desc):
+        self.call_order.append("intent")
+        self.intent_reviews.append(
+            {
+                "intent": intent,
+                "context_manager": context_manager,
+                "task_desc": task_desc,
+                "file_exists": os.path.exists(os.path.join(self.project_path, self.target_file)),
+            }
+        )
+        if self.approve_intent:
+            return True, "Approved"
+        return False, "Rejected for test"
+
+    def review_result(self, intent, original, modified, task_desc):
+        self.call_order.append("result")
+        self.result_reviews.append(
+            {
+                "intent": intent,
+                "task_desc": task_desc,
+                "file_exists": os.path.exists(os.path.join(self.project_path, self.target_file)),
+                "original": original,
+                "modified": modified,
+            }
+        )
+        return True, "Looks good"
+
+
+class TestPlannerCriticIntegration(unittest.TestCase):
+    def setUp(self):
+        os.environ["FORGECORE_USE_LLM"] = "false"
+        self.project_path = tempfile.mkdtemp(prefix="forgecore_planner_critic_")
+
+    def tearDown(self):
+        if os.path.exists(self.project_path):
+            shutil.rmtree(self.project_path)
+
+    def _create_controller(self):
+        controller = Controller(self.project_path, MagicMock())
+        controller.builder = SuccessfulBuild()
+        controller.execution_engine._validate_post_build_callback = lambda context: (True, "")
+        return controller
+
+    def test_execute_task_passes_through_planner_and_critic_for_file_creation(self):
+        controller = self._create_controller()
+        task_description = "create created_by_agents.py and finish the task"
+        target_file = "created_by_agents.py"
+        content = "value = 42\n"
+        planner = RecordingPlanner(target_file, content)
+        critic = RecordingCritic(self.project_path, target_file, approve_intent=True)
+
+        controller.planner = planner
+        controller.critic = critic
+        controller.execution_engine.planner = planner
+        controller.execution_engine.critic = critic
+
+        result = controller.execute_task(task_description)
+        target_path = os.path.join(self.project_path, target_file)
+
+        self.assertIn("Task completed successfully", result)
+        self.assertTrue(os.path.exists(target_path))
+        with open(target_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), content)
+
+        self.assertEqual(len(planner.calls), 1)
+        self.assertEqual(planner.calls[0]["task_description"], task_description)
+        self.assertEqual(planner.calls[0]["iteration"], 1)
+
+        self.assertEqual(critic.call_order, ["intent", "result"])
+        self.assertEqual(len(critic.intent_reviews), 1)
+        self.assertEqual(len(critic.result_reviews), 1)
+        self.assertFalse(critic.intent_reviews[0]["file_exists"])
+        self.assertTrue(critic.result_reviews[0]["file_exists"])
+        self.assertIs(critic.intent_reviews[0]["context_manager"], planner.context_manager)
+        self.assertEqual(critic.intent_reviews[0]["task_desc"], task_description)
+        self.assertEqual(critic.result_reviews[0]["task_desc"], task_description)
+        self.assertEqual(critic.intent_reviews[0]["intent"].operation, Operation.CREATE_FILE)
+        self.assertEqual(critic.result_reviews[0]["original"], "")
+        self.assertEqual(critic.result_reviews[0]["modified"], content)
+
+    def test_critic_rejection_stops_task_before_file_creation(self):
+        controller = self._create_controller()
+        task_description = "create blocked_by_critic.py and finish the task"
+        target_file = "blocked_by_critic.py"
+        planner = RecordingPlanner(target_file, "value = 7\n")
+        critic = RecordingCritic(self.project_path, target_file, approve_intent=False)
+
+        controller.planner = planner
+        controller.critic = critic
+        controller.execution_engine.planner = planner
+        controller.execution_engine.critic = critic
+
+        result = controller.execute_task(task_description)
+        target_path = os.path.join(self.project_path, target_file)
+
+        self.assertIn("Critic rejected intent", result)
+        self.assertFalse(os.path.exists(target_path))
+        self.assertEqual(critic.call_order, ["intent"])
+        self.assertEqual(len(critic.result_reviews), 0)
+
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
-
-
+    unittest.main()

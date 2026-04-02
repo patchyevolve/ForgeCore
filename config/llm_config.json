@@ -1,13 +1,13 @@
 {
     "planner": {
         "backend": "groq",
-        "model": "qwen/qwen3-32b",
+        "model": "llama-3.3-70b-versatile",
         "temperature": 0.1,
         "timeout": 60
     },
     "critic": {
         "backend": "groq",
-        "model": "openai/gpt-oss-120b",
+        "model": "llama-3.3-70b-versatile",
         "temperature": 0.1,
         "timeout": 60
     }

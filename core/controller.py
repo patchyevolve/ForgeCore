@@ -18,6 +18,7 @@ from core.planner import Planner, PlannerError
 from core.symbol_validator import SymbolValidator, UndefinedSymbolError
 from core.call_graph_analyzer import CallGraphAnalyzer
 from core.transaction_context import TransactionContext
+from core.execution_engine import ExecutionEngine
 
 
 class Controller:
@@ -31,7 +32,6 @@ class Controller:
     def builder(self, value):
         """Compatibility setter for legacy tests with shimming for MockBuild"""
         if hasattr(value, 'run_build') and not hasattr(value, 'validate'):
-            # Shim for tests that expect a 'builder' with run_build()
             class ValidatorShim:
                 def __init__(self, builder_obj):
                     self.builder_obj = builder_obj
@@ -43,6 +43,8 @@ class Controller:
             self.validator = ValidatorShim(value)
         else:
             self.validator = value
+        if hasattr(self, "execution_engine"):
+            self.execution_engine.validator = self.validator
 
     SUPPORTED_OPERATIONS = {
         Operation.APPEND_RAW,
@@ -146,6 +148,33 @@ class Controller:
         use_llm_critic = os.getenv('FORGECORE_USE_LLM', 'true').lower() == 'true'
         from core.critic import Critic
         self.critic = Critic(use_llm=use_llm_critic)
+        
+        # Initialize execution engine
+        self.execution_engine = ExecutionEngine(
+            target_project_path=target_project_path,
+            state_machine=self.state_machine,
+            planner=self.planner,
+            critic=self.critic,
+            validator=self.validator,
+            semantic_validator=self.semantic_validator,
+            indexer=self.indexer,
+            snapshot_manager=self.snapshot_manager,
+            error_classifier=self.error_classifier,
+            logger=logger,
+            max_iterations=self.max_iterations,
+            stagnation_detection_enabled=self.stagnation_detection_enabled,
+            semantic_validation_enabled=self.semantic_validation_enabled
+        )
+        
+        # Set callbacks for execution engine
+        self.execution_engine.set_callbacks(
+            validate_intent=self._validate_intent,
+            ensure_baselines=self._ensure_baselines,
+            generate_mutations=self._generate_mutations,
+            validate_mutations=self._validate_mutations,
+            apply_mutations=self._apply_mutations,
+            validate_post_build=self._validate_post_build
+        )
 
     def _compute_intent_fingerprint(self, intent: PatchIntent) -> str:
         """Compute deterministic hash of intent for stagnation detection"""
@@ -506,12 +535,12 @@ class Controller:
         
         return staged_writes
     
-    def _validate_mutations(self, staged_writes: dict, context: TransactionContext) -> tuple:
+    def _validate_mutations(self, staged_writes: dict, context: TransactionContext, intent: PatchIntent) -> tuple:
         """
         Validate staged mutations with cross-file awareness
         
         Checks:
-        - Per-file rewrite ratio
+        - Per-file rewrite ratio (bypassed by CREATE_FILE)
         - Cross-file total rewrite ratio
         - Line limits per file
         - File count limits
@@ -523,6 +552,7 @@ class Controller:
         Args:
             staged_writes: Dict of file -> new content
             context: Transaction context
+            intent: Current intent (to check operation types)
             
         Returns:
             (valid, reason) tuple
@@ -590,12 +620,18 @@ class Controller:
             # Check if this is a CREATE_FILE operation (empty baseline)
             is_new_file = baseline.get("hash") == ""
             
+            # Find the mutation for this file to check its operation
+            mutation = next((m for m in intent.mutations if m.target_file == file), None)
+            is_create_op = mutation and mutation.operation == Operation.CREATE_FILE
+            
             line_diff = self._line_diff_count(baseline["content"], new_content)
             
             # User-facing summary of per-file impact
             try:
                 if is_new_file:
                     print(f"  [create] {file}  (~{line_diff} lines)")
+                elif is_create_op:
+                    print(f"  [overwrite] {file}  (~{line_diff} lines)")
                 else:
                     size = baseline["size"]
                     print(f"  [modify] {file}  (~{line_diff} changed lines out of {size})")
@@ -607,8 +643,8 @@ class Controller:
             total_baseline_lines += baseline["size"]
             total_changed_lines += line_diff
             
-            # Skip rewrite ratio check for new files (CREATE_FILE)
-            if not is_new_file:
+            # Skip rewrite ratio check for new files OR if explicitly using CREATE_FILE op
+            if not is_new_file and not is_create_op:
                 # Per-file rewrite ratio check (only for existing files)
                 if baseline["size"] > 0:
                     change_ratio = line_diff / baseline["size"]
@@ -726,16 +762,22 @@ class Controller:
             # Apply file writes
             for file_path, content in staged_writes.items():
                 try:
-                    # Check if this is a CREATE_FILE operation
-                    baseline = context.get_baseline(file_path)
-                    is_new_file = baseline and baseline.get("hash") == ""
+                    # Determine if we should create or overwrite based on disk state
+                    # We use the dispatcher's internal resolution to be consistent
+                    full_path = self.dispatcher._resolve_path(file_path)
+                    exists_on_disk = os.path.exists(full_path)
                     
-                    if is_new_file:
+                    if exists_on_disk:
+                        # Use overwrite_file for existing files (even if intent said create_file)
+                        self.dispatcher.overwrite_file(file_path, content, allow_tier1=True)
+                    else:
                         # Use create_file for new files
                         self.dispatcher.create_file(file_path, content, allow_tier1=True)
-                    else:
-                        # Use overwrite_file for existing files
-                        self.dispatcher.overwrite_file(file_path, content, allow_tier1=True)
+                    
+                    # Update baseline so subsequent iterations have fresh context
+                    new_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+                    context.update_baseline(file_path, content, new_hash)
+                    
                 except Exception as e:
                     # Rollback database transaction on file write failure
                     self.indexer.rollback_transaction(db_savepoint)
@@ -934,6 +976,8 @@ class Controller:
         """
         Single mutation spine for both execution paths with dynamic baseline management
         
+        This method now delegates to ExecutionEngine for the core execution logic.
+        
         Args:
             intent: Initial PatchIntent (None for planner mode - planner generates first intent)
             context: Transaction context with all execution state
@@ -948,7 +992,6 @@ class Controller:
         self._mutations_applied = False
         
         # Determine target files for selective snapshot if intent is already known
-        # In planner mode, intent is None initially, so we'll handle it inside the loop
         target_files = None
         if intent:
             target_files = list(self._get_target_files(intent))
@@ -959,447 +1002,28 @@ class Controller:
         if not self._snapshot_exists():
             return self._handle_abort("Snapshot creation failed unexpectedly")
         
-        # Iteration loop
-        while context.should_continue():
-            context.increment_iteration()
-            
-            # PLANNING - Generate/refine intent if planner mode
-            self.state_machine.transition_to(State.PLANNING)
-            
-            if context.iteration_mode and context.planner_context:
-                # Planner mode: generate intent from task
-                try:
-                    error_context = context.get_error_context()
-                    previous_intent = context.get_previous_intent()
-                    # Planner API expects a list of error dicts or None; our type change
-                    # ensures error_context has correct signature now.
-                    # error_context now correctly typed as Optional[List[Dict[str, Any]]]
-                    
-                    # Generate new intent for this iteration
-                    intent = self.planner.generate_intent(
-                        task_description=context.planner_context['task_description'],
-                        error_context=error_context,
-                        iteration=context.current_iteration,
-                        previous_intent=previous_intent
-                    )
-                    
-                    # Update snapshot if new files are targeted in this iteration
-                    new_targets = self._get_target_files(intent)
-                    self.snapshot_manager._create_selective_snapshot(list(new_targets))
-                    
-                except Exception as e:
-                    self.logger.log_event(
-                        state=self.state_machine.get_state().name,
-                        event="PLANNER_FAILED",
-                        details={"error": str(e)}
-                    )
-                    # Sync state before abort
-                    self._sync_state_from_context(context)
-                    return self._handle_abort(f"Planner failed: {e}")
-            
-            # DYNAMIC BASELINE EXPANSION - Capture baselines for new files
-            # This is critical for multi-iteration planner execution
-            # by this point the intent must have been generated (planner mode) or
-            # provided by caller (direct mode) so we can safely assert it's not None
-            # Narrow type for remainder of iteration
-            intent = cast(PatchIntent, intent)
-            
-            # Validate intent BEFORE baseline capture to catch unindexed files early
-            valid, reason = self._validate_intent(intent)
-            if not valid:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="SEMANTIC_REJECT_INVALID_INTENT",
-                    details={"reason": reason}
-                )
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort(f"Semantic rejection: {reason}")
-            
-            # DYNAMIC BASELINE EXPANSION - Capture baselines for the validated files
-            self._ensure_baselines(intent, context)
-            
-            # High-level iteration summary for user
-            try:
-                # reaffirm intent non-null for type checker (should already be narrowed)
-                assert intent is not None
-                print("\n" + "=" * 70)
-                print(f"ITERATION {context.current_iteration}")
-                print("=" * 70)
-                if intent.is_multi_file:
-                    print(f"Planned operation: multi-file intent")
-                else:
-                    # in single-file mode the operation field is guaranteed to be set
-                    assert intent.operation is not None
-                    print(f"Planned operation: {intent.operation.value}")
-                target_files = intent.target_files
-                print(f"Target file(s): {', '.join(target_files)}")
-            except Exception:
-                # Never let UI printing break core execution
-                pass
-            
-            
-            # Compute intent fingerprint
-            intent_hash = self._compute_intent_fingerprint(intent)
-            self.logger.log_event(
-                state=self.state_machine.get_state().name,
-                event="INTENT_FINGERPRINT",
-                details={"intent_hash": intent_hash[:16]}
-            )
-            
-            # CRITIC REVIEW
-            self.state_machine.transition_to(State.CRITIC_REVIEW)
-            
-            # Get file content for review (Use baseline cache to avoid redundant I/O)
-            # Support both single-file and multi-file intents
-            # intent guaranteed non-null by assert above
-            if not intent.is_multi_file:
-                assert intent.target_file is not None
-                target_file = intent.target_file
-            else:
-                target_file = intent.target_files[0]
-            
-            baseline = context.get_baseline(target_file)
-            if baseline and baseline.get("content") is not None:
-                file_content = baseline["content"]
-            else:
-                # Fallback to disk if not in baseline (e.g. first attempt at new file)
-                try:
-                    with open(os.path.join(self.target_project_path, target_file), 'r') as f:
-                        file_content = f.read()
-                except (FileNotFoundError, TypeError):
-                    # File doesn't exist yet (CREATE_FILE operation) or invalid path
-                    file_content = ""
-            
-            # Review intent with critic
-            # determine task description for critic (may be None)
-            task_desc: Optional[str] = None
-            if context.planner_context:
-                # planner_context is a generic dict; cast safely
-                task_desc = context.planner_context.get('task_description')  # type: ignore
-            approved, feedback = self.critic.review_intent(
-                intent,
-                file_content,
-                task_desc
-            )
-            
-            self.logger.log_event(
-                state=self.state_machine.get_state().name,
-                event="CRITIC_REVIEW_COMPLETE",
-                details={
-                    "approved": approved,
-                    "feedback": feedback[:100]
-                }
-            )
-            
-            if not approved:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="CRITIC_REJECTED_ABORT",
-                    details={"reason": feedback}
-                )
-                # Critic rejection is MANDATORY - abort transaction
-                self._sync_state_from_context(context)
-                return self._handle_abort(f"Critic rejected intent: {feedback}")
-            
-            # PATCH READY
-            self.state_machine.transition_to(State.PATCH_READY)
-            
-            # APPLYING
-            self.state_machine.transition_to(State.APPLYING)
-            
-            # Generate mutations
-            staged_writes = self._generate_mutations(intent, context)
-            
-            # Compute content hash (for stagnation detection)
-            # For multi-file, hash all content together
-            all_content = ''.join(staged_writes[f] for f in sorted(staged_writes.keys()))
-            content_hash = self._compute_content_fingerprint(all_content)
-            
-            # Check for stagnation (iteration 2+)
-            if context.current_iteration > 1:
-                last_iteration = context.get_last_iteration()
-                assert last_iteration is not None
-                
-                if (last_iteration['intent_hash'] == intent_hash and
-                    last_iteration['content_hash'] == content_hash):
-                    self.logger.log_event(
-                        state=self.state_machine.get_state().name,
-                        event="STAGNATION_DETECTED_IDENTICAL_CONTENT",
-                        details={
-                            "iteration": context.current_iteration,
-                            "intent_hash": intent_hash[:16],
-                            "content_hash": content_hash[:16]
-                        }
-                    )
-                    # Sync state before abort
-                    self._sync_state_from_context(context)
-                    return self._handle_abort(
-                        f"Stagnation detected: {'planner generated' if context.iteration_mode else ''} identical content in iteration {context.current_iteration}"
-                    )
-            
-            # Validate mutations (marks files as candidates)
-            valid, reason = self._validate_mutations(staged_writes, context)
-            if not valid:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="MUTATION_VALIDATION_FAILED",
-                    details={"reason": reason}
-                )
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort(reason)
-            
-            # Apply mutations (commits candidates to modified_files on success)
-            success, error = self._apply_mutations(staged_writes, context)
-            if not success:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="WRITE_FAILED",
-                    details={"error": error}
-                )
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort(error)
-            
-            # Update baselines for next iteration (file integrity guard)
-            for file, content in staged_writes.items():
-                file_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-                context.update_baseline(file, content, file_hash)
-            
-            # SEMANTIC VALIDATION (before build)
-            if self.semantic_validation_enabled:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="SEMANTIC_VALIDATION_START",
-                    details={"files": list(staged_writes.keys())}
-                )
-                
-                # Run semantic validation on the staged writes
-                semantic_valid, semantic_issues = self.semantic_validator.validate(
-                    set(staged_writes.keys()),
-                    staged_writes
-                )
-                
-                # Log and display issues
-                if semantic_issues:
-                    errors = [i for i in semantic_issues if i.severity == "error"]
-                    warnings = [i for i in semantic_issues if i.severity == "warning"]
-                    
-                    if errors:
-                        print("\n[!] Semantic validation errors:")
-                        for error in errors:
-                            print(f"  {error.file}:{error.line} - {error.message}")
-                            if error.suggestion:
-                                print(f"    Suggestion: {error.suggestion}")
-                    
-                    if warnings:
-                        print("\n[!] Semantic validation warnings:")
-                        for warning in warnings:
-                            print(f"  {warning.file}:{warning.line} - {warning.message}")
-                            if warning.suggestion:
-                                print(f"    Suggestion: {warning.suggestion}")
-                
-                # Fail if semantic errors found
-                if not semantic_valid:
-                    error_summary = f"{len([i for i in semantic_issues if i.severity == 'error'])} semantic error(s)"
-                    self.logger.log_event(
-                        state=self.state_machine.get_state().name,
-                        event="SEMANTIC_VALIDATION_FAILED",
-                        details={"error_summary": error_summary}
-                    )
-                    # Sync state before abort
-                    self._sync_state_from_context(context)
-                    return self._handle_abort(f"Semantic validation failed: {error_summary}")
-            
-            # COMPILING
-            self.state_machine.transition_to(State.COMPILING)
-            result = self.validator.validate(list(staged_writes.keys()))
-            
-            if result.get("success", False):
-                # SUCCESS PATH
-                self.state_machine.transition_to(State.FINAL_CRITIC)
-                
-                # Final critic review of the result
-                for file in staged_writes.keys():
-                    try:
-                        with open(os.path.join(self.target_project_path, file), 'r') as f:
-                            modified_content = f.read()
-                        
-                        original_content = context.baselines.get(file, {}).get('content', '')
-                        
-                        task_desc: Optional[str] = None
-                        if context.planner_context:
-                            task_desc = context.planner_context.get('task_description')  # type: ignore
-                        approved, feedback = self.critic.review_result(
-                            intent,
-                            original_content,
-                            modified_content,
-                            task_desc
-                        )
-                        
-                        self.logger.log_event(
-                            state=self.state_machine.get_state().name,
-                            event="FINAL_CRITIC_REVIEW",
-                            details={
-                                "file": file,
-                                "approved": approved,
-                                "feedback": feedback[:100]
-                            }
-                        )
-                        
-                        if not approved:
-                            self.logger.log_event(
-                                state=self.state_machine.get_state().name,
-                                event="FINAL_CRITIC_CONCERNS",
-                                details={"file": file, "concerns": feedback}
-                            )
-                    except Exception as e:
-                        self.logger.log_event(
-                            state=self.state_machine.get_state().name,
-                            event="FINAL_CRITIC_ERROR",
-                            details={"error": str(e)}
-                        )
-                
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="FINAL_CRITIC_APPROVED",
-                    details={"iteration": context.current_iteration}
-                )
-                
-                # MODULE INTEGRITY CHECK
-                self.state_machine.transition_to(State.MODULE_INTEGRITY_CHECK)
-                
-                valid, reason = self._validate_post_build(context)
-                if not valid:
-                    # Always log the post-build failure
-                    self.logger.log_event(
-                        state=self.state_machine.get_state().name,
-                        event="POST_BUILD_VALIDATION_FAILED",
-                        details={"reason": reason}
-                    )
-                    
-                    # In direct (non-iteration) mode, abort immediately as before
-                    if not context.iteration_mode:
-                        self._sync_state_from_context(context)
-                        return self._handle_abort(reason)
-                    
-                    # In planner iteration mode, treat post-build validation failures
-                    # as refinable errors, similar to compiler/validation failures.
-                    structured_errors = [{
-                        "type": "POST_BUILD_VALIDATION_FAILED",
-                        "message": reason
-                    }]
-                    error_hash = self._compute_error_fingerprint(structured_errors)
-                    
-                    self.logger.log_event(
-                        state=self.state_machine.get_state().name,
-                        event="STRUCTURED_ERRORS",
-                        details={"errors": structured_errors, "error_hash": error_hash[:16]}
-                    )
-                    
-                    # Check for error stagnation across iterations
-                    if context.last_error_hash and context.last_error_hash == error_hash:
-                        self.logger.log_event(
-                            state=self.state_machine.get_state().name,
-                            event="STAGNATION_DETECTED_IDENTICAL_ERRORS",
-                            details={"iteration": context.current_iteration, "error_hash": error_hash[:16]}
-                        )
-                        self._sync_state_from_context(context)
-                        return self._handle_abort(
-                            f"Stagnation detected: planner unable to resolve post-build validation errors after iteration {context.current_iteration}"
-                        )
-                    
-                    context.last_error_hash = error_hash
-                    
-                    # Respect max-iterations guardrail
-                    if context.current_iteration >= context.max_iterations:
-                        self._sync_state_from_context(context)
-                        return self._handle_abort("Max iterations reached. Rolled back")
-                    
-                    # Record iteration for planner error context
-                    context.record_iteration({
-                        "iteration": context.current_iteration,
-                        "intent": intent,
-                        "intent_hash": intent_hash,
-                        "content_hash": content_hash,
-                        "errors": structured_errors,
-                        "error_hash": error_hash,
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    
-                    # Allow planner to refine based on post-build validation issues
-                    self.state_machine.transition_to(State.REFINEMENT)
-                    continue
-                
-                # COMMIT - Sync state before commit
-                self._sync_state_from_context(context)
-                return self._handle_commit(context)
-            
-            # FAILURE PATH
-            self.state_machine.transition_to(State.ERROR_CLASSIFY)
-            
-            # Extract errors from validation result
-            if 'errors' in result:
-                structured_errors = result['errors']
-            elif 'stderr' in result:
-                combined_output = result.get("stdout", "") + "\n" + result.get("stderr", "")
-                structured_errors = self.error_classifier.classify(combined_output)
-            else:
-                structured_errors = [{"type": "VALIDATION_FAILED", "message": str(result)}]
-            
-            error_hash = self._compute_error_fingerprint(structured_errors)
-            
-            self.logger.log_event(
-                state=self.state_machine.get_state().name,
-                event="STRUCTURED_ERRORS",
-                details={"errors": structured_errors, "error_hash": error_hash[:16]}
-            )
-            
-            # Check for error stagnation
-            if context.last_error_hash and context.last_error_hash == error_hash:
-                self.logger.log_event(
-                    state=self.state_machine.get_state().name,
-                    event="STAGNATION_DETECTED_IDENTICAL_ERRORS",
-                    details={"iteration": context.current_iteration, "error_hash": error_hash[:16]}
-                )
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort(
-                    f"Stagnation detected: {'planner unable to resolve' if context.iteration_mode else 'identical'} errors after iteration {context.current_iteration}"
-                )
-            
-            context.last_error_hash = error_hash
-            
-            # If not iteration mode, abort on first failure
-            if not context.iteration_mode:
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort("Build failed")
-            
-            # Check iteration limit
-            if context.current_iteration >= context.max_iterations:
-                # Sync state before abort
-                self._sync_state_from_context(context)
-                return self._handle_abort("Max iterations reached. Rolled back")
-            
-            # RECORD ITERATION for planner feedback
-            context.record_iteration({
-                'iteration': context.current_iteration,
-                'intent': intent,
-                'intent_hash': intent_hash,
-                'content_hash': content_hash,
-                'errors': structured_errors,
-                'error_hash': error_hash,
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            # REFINEMENT - Loop back to planning
-            self.state_machine.transition_to(State.REFINEMENT)
+        # Execute with ExecutionEngine
+        if context.iteration_mode:
+            # Planner mode
+            task_description = context.planner_context['task_description']
+            result = self.execution_engine.execute_with_planner(task_description, context)
+        else:
+            # Direct mode
+            result = self.execution_engine.execute_direct(intent, context)
         
-        # Safety fallback - sync state before abort
+        # Sync state from context
         self._sync_state_from_context(context)
-        return self._handle_abort("Unexpected termination. Rolled back")
+        
+        # Handle result
+        if result.is_success():
+            return self._handle_commit(context)
+        else:
+            # Map ExecutionResult status to abort reason
+            if result.errors:
+                reason = "; ".join(result.errors)
+            else:
+                reason = f"Execution failed with status: {result.status}"
+            return self._handle_abort(reason)
     
     def _sync_state_from_context(self, context: TransactionContext) -> None:
         """
@@ -1498,7 +1122,7 @@ class Controller:
             # Create transaction context for direct mode
             context = TransactionContext(
                 iteration_mode=False,
-                planner_context=None,
+                planner_context={'task_description': self.current_task_description} if self.current_task_description else None,
                 max_iterations=1
             )
             
