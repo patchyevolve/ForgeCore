@@ -350,14 +350,25 @@ class ExecutionEngine:
         if not approved:
             self.logger.log_event(
                 state=self.state_machine.get_state().name,
-                event="CRITIC_REJECTED_ABORT",
-                details={"reason": feedback}
+                event="CRITIC_REJECTED",
+                details={"reason": feedback[:500] if feedback else ""},
             )
-            return ExecutionResult(
-                status="REJECTED",
-                modified_files=[],
-                iterations=context.current_iteration,
-                errors=[f"Critic rejected intent: {feedback}"]
+            structured_errors = [
+                {
+                    "type": "CRITIC_REJECTED_INTENT",
+                    "message": f"Critic rejected intent: {feedback}",
+                }
+            ]
+            if not context.iteration_mode:
+                return ExecutionResult(
+                    status="REJECTED",
+                    modified_files=[],
+                    iterations=context.current_iteration,
+                    errors=[structured_errors[0]["message"]],
+                )
+            pre_apply_hash = self._compute_content_fingerprint("")
+            return self._refine_after_iteration_error(
+                context, intent, intent_hash, pre_apply_hash, structured_errors
             )
         
         # PATCH READY
@@ -393,25 +404,19 @@ class ExecutionEngine:
                 event="MUTATION_VALIDATION_FAILED",
                 details={"reason": reason}
             )
-            # Transition to ABORT then IDLE to allow next iteration
+            structured_errors = [{"type": "MUTATION_VALIDATION_FAILED", "message": reason}]
+            if context.iteration_mode:
+                return self._refine_after_iteration_error(
+                    context, intent, intent_hash, content_hash, structured_errors
+                )
             self.state_machine.transition_to(State.ABORT)
             self.state_machine.transition_to(State.IDLE)
-            
-            # Check if max_iterations reached
-            if context.current_iteration >= context.max_iterations:
-                return ExecutionResult(
-                    status="MAX_ITERATIONS",
-                    modified_files=[],
-                    iterations=context.current_iteration,
-                    errors=[reason]
-                )
-            else:
-                return ExecutionResult(
-                    status="FAILED",
-                    modified_files=[],
-                    iterations=context.current_iteration,
-                    errors=[reason]
-                )
+            return ExecutionResult(
+                status="FAILED",
+                modified_files=[],
+                iterations=context.current_iteration,
+                errors=[reason],
+            )
         
         # Apply mutations
         success, error = self._apply_mutations_callback(staged_writes, context)
@@ -421,25 +426,19 @@ class ExecutionEngine:
                 event="WRITE_FAILED",
                 details={"error": error}
             )
-            # Transition to ABORT then IDLE to allow next iteration
+            structured_errors = [{"type": "WRITE_FAILED", "message": error}]
+            if context.iteration_mode:
+                return self._refine_after_iteration_error(
+                    context, intent, intent_hash, content_hash, structured_errors
+                )
             self.state_machine.transition_to(State.ABORT)
             self.state_machine.transition_to(State.IDLE)
-            
-            # Check if max_iterations reached
-            if context.current_iteration >= context.max_iterations:
-                return ExecutionResult(
-                    status="MAX_ITERATIONS",
-                    modified_files=[],
-                    iterations=context.current_iteration,
-                    errors=[error]
-                )
-            else:
-                return ExecutionResult(
-                    status="FAILED",
-                    modified_files=[],
-                    iterations=context.current_iteration,
-                    errors=[error]
-                )
+            return ExecutionResult(
+                status="FAILED",
+                modified_files=[],
+                iterations=context.current_iteration,
+                errors=[error],
+            )
         
         # Re-index after apply
         try:
@@ -711,7 +710,84 @@ class ExecutionEngine:
             iterations=context.current_iteration,
             errors=structured_errors
         )
-    
+
+    def _refine_after_iteration_error(
+        self,
+        context: TransactionContext,
+        intent: PatchIntent,
+        intent_hash: str,
+        content_hash: str,
+        structured_errors: list,
+    ) -> ExecutionResult:
+        """
+        Record structured errors so the planner receives them via TransactionContext,
+        then return REFINEMENT for another pass (planner iteration mode only).
+        """
+        self.state_machine.transition_to(State.ERROR_CLASSIFY)
+
+        error_hash = self._compute_error_fingerprint(structured_errors)
+
+        self.logger.log_event(
+            state=self.state_machine.get_state().name,
+            event="PLANNER_REFINEMENT",
+            details={"errors": structured_errors, "error_hash": error_hash[:16]},
+        )
+
+        critic_only = bool(structured_errors) and all(
+            isinstance(e, dict) and e.get("type") == "CRITIC_REJECTED_INTENT"
+            for e in structured_errors
+        )
+        if (
+            self.stagnation_detection_enabled
+            and not critic_only
+            and context.last_error_hash
+            and context.last_error_hash == error_hash
+        ):
+            self.logger.log_event(
+                state=self.state_machine.get_state().name,
+                event="STAGNATION_DETECTED_IDENTICAL_ERRORS",
+                details={"iteration": context.current_iteration, "error_hash": error_hash[:16]},
+            )
+            return ExecutionResult(
+                status="STAGNATED",
+                modified_files=[],
+                iterations=context.current_iteration,
+                errors=["Stagnation detected: same refinement error as the previous iteration"],
+            )
+
+        context.last_error_hash = error_hash
+
+        if context.current_iteration >= context.max_iterations:
+            flat = [
+                e.get("message", str(e)) if isinstance(e, dict) else str(e)
+                for e in structured_errors
+            ]
+            return ExecutionResult(
+                status="MAX_ITERATIONS",
+                modified_files=[],
+                iterations=context.current_iteration,
+                errors=flat or ["Max iterations reached"],
+            )
+
+        context.record_iteration(
+            {
+                "iteration": context.current_iteration,
+                "intent": intent,
+                "intent_hash": intent_hash,
+                "content_hash": content_hash,
+                "errors": structured_errors,
+                "error_hash": error_hash,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        self.state_machine.transition_to(State.REFINEMENT)
+        return ExecutionResult(
+            status="REFINEMENT",
+            modified_files=[],
+            iterations=context.current_iteration,
+            errors=structured_errors,
+        )
+
     def _run_semantic_validation(
         self,
         staged_writes: Dict[str, str],

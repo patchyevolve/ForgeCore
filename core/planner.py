@@ -197,9 +197,17 @@ Keep it concise but thorough."""
         Identify relevant files and ensure they have semantic summaries.
         Returns the list of relevant files.
         """
+        if os.getenv("FORGECORE_DISABLE_SEMANTIC_PREP", "false").lower() == "true":
+            return []
+
+        try:
+            prep_cap = int(os.getenv("FORGECORE_SEMANTIC_PREP_MAX_FILES", "3").strip() or "3")
+        except ValueError:
+            prep_cap = 3
+        prep_cap = max(0, prep_cap)
+
         relevant_files = []
         try:
-            import os
             # 1. Identify files mentioned in task
             words = task.lower().split()
             cursor = self.indexer.conn.cursor()
@@ -220,8 +228,8 @@ Keep it concise but thorough."""
                         relevant_files.append(sym_file)
             
             # 3. Summarize missing or outdated summaries for these files
-            # Limit to top 3 most relevant files to avoid 429 and token limits
-            for file_path in relevant_files[:3]:
+            # Limit file count to avoid stacking many LLM calls before the main planner request
+            for file_path in relevant_files[:prep_cap]:
                 cursor.execute("SELECT semantic_context FROM files WHERE path = ?", (file_path,))
                 row = cursor.fetchone()
                 if not row or not row[0] or "Error generating summary" in str(row[0]):
@@ -786,7 +794,11 @@ RESPOND WITH VALID JSON ONLY."""
                 msg = err.get('message', str(err))
                 err_type = str(err.get('type', ''))
                 
-                if "CRITIC_REJECTION" in err_type or "Critic rejected" in msg:
+                if (
+                    "CRITIC_REJECTION" in err_type
+                    or "CRITIC_REJECTED" in err_type
+                    or "Critic rejected" in msg
+                ):
                     user_prompt += f"CRITIC FEEDBACK (FIX THIS): {msg}\n"
                 elif "USER_REJECTION" in err_type:
                     user_prompt += f"USER FEEDBACK: {err.get('feedback')}\n"

@@ -28,11 +28,11 @@ class StateMachine:
 
 			State.PLANNING:			{State.CRITIC_REVIEW, State.ABORT},
 			
-			State.CRITIC_REVIEW:	{State.PATCH_READY, State.ABORT},
+			State.CRITIC_REVIEW:	{State.PATCH_READY, State.ABORT, State.ERROR_CLASSIFY},
 
 			State.PATCH_READY:		{State.APPLYING, State.ABORT},
 			
-			State.APPLYING:			{State.COMPILING, State.ABORT},
+			State.APPLYING:			{State.COMPILING, State.ABORT, State.ERROR_CLASSIFY},
 			
 			State.COMPILING:		{State.FINAL_CRITIC, State.ERROR_CLASSIFY},
 

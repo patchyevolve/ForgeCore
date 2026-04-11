@@ -146,9 +146,12 @@ class TestPlannerCriticIntegration(unittest.TestCase):
         result = controller.execute_task(task_description)
         target_path = os.path.join(self.project_path, target_file)
 
+        # Planner mode refines until max_iterations when the critic never approves
+        max_it = controller.max_iterations
         self.assertIn("Critic rejected intent", result)
         self.assertFalse(os.path.exists(target_path))
-        self.assertEqual(critic.call_order, ["intent"])
+        self.assertEqual(len(planner.calls), max_it)
+        self.assertEqual(critic.call_order, ["intent"] * max_it)
         self.assertEqual(len(critic.result_reviews), 0)
 
 

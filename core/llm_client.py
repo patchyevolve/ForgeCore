@@ -13,7 +13,7 @@ import os
 import time
 import requests
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Tuple
 try:
     import ollama
 except ImportError:
@@ -24,10 +24,42 @@ try:
 except ImportError:
     repair_json = None
 
-# Global state for rate limiting (shared across all client instances)
+# Global state for rate limiting (shared across all client instances in this process)
 _last_request_time = 0.0
-_MIN_REQUEST_INTERVAL = 20.0  # Conservative 20 seconds (3 RPM) for Groq Free Tier safety
 _cooldown_lock = threading.Lock()
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _min_request_interval() -> float:
+    """Minimum seconds between remote HTTP LLM calls (one process; same key in other apps still counts)."""
+    # Default stays conservative for shared free-tier keys; lower FORGECORE_LLM_MIN_INTERVAL_SEC if your tier allows.
+    return max(0.0, _env_float("FORGECORE_LLM_MIN_INTERVAL_SEC", 20.0))
+
+
+def _remote_post_retry_settings() -> Tuple[int, float]:
+    """(max_retries, initial_backoff_seconds) for 429 / transport retries."""
+    retries = max(1, _env_int("FORGECORE_LLM_REMOTE_MAX_RETRIES", 6))
+    backoff = max(1.0, _env_float("FORGECORE_LLM_REMOTE_INITIAL_BACKOFF_SEC", 25.0))
+    return retries, backoff
 
 
 def _remote_healthcheck_enabled() -> bool:
@@ -38,22 +70,29 @@ def _post_with_retry(
     headers: Dict[str, str],
     json_data: Dict[str, Any],
     timeout: int = 60,
-    max_retries: int = 3,
-    initial_delay: float = 20.0
+    max_retries: Optional[int] = None,
+    initial_delay: Optional[float] = None,
 ) -> requests.Response:
-    """Helper for making POST requests with exponential backoff and global cooldown"""
+    """Helper for making POST requests with exponential backoff and global cooldown."""
     global _last_request_time
-    
+    if max_retries is None or initial_delay is None:
+        cfg_retries, cfg_backoff = _remote_post_retry_settings()
+        if max_retries is None:
+            max_retries = cfg_retries
+        if initial_delay is None:
+            initial_delay = cfg_backoff
+    min_interval = _min_request_interval()
+
     for attempt in range(max_retries):
         # Hold the lock DURING the entire request process to prevent ANY concurrent requests
         with _cooldown_lock:
             # 1. Enforce cooldown since the LAST request finished
             now = time.time()
             time_since_last = now - _last_request_time
-            if time_since_last < _MIN_REQUEST_INTERVAL:
-                sleep_time = _MIN_REQUEST_INTERVAL - time_since_last
+            if time_since_last < min_interval:
+                sleep_time = min_interval - time_since_last
                 if sleep_time > 0.5:
-                    print(f"[INFO] Global cooldown active. Waiting {sleep_time:.1f}s to ensure one-by-one requests...")
+                    print(f"[INFO] Global cooldown active. Waiting {sleep_time:.1f}s between remote LLM requests...")
                 time.sleep(sleep_time)
             
             # 2. Perform the actual request while STILL holding the lock

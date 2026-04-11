@@ -5,9 +5,56 @@ Uses LLM (DeepSeek Coder 6.7B) for intelligent code review.
 Falls back to simulated approval on LLM failure.
 """
 
+import re
+import os
 from typing import Dict, Any, Tuple, Optional
 from core.patch_intent import PatchIntent
 from core.llm_client import create_critic_client, BaseLLMClient
+
+
+def _parse_intent_review_verdict(response: str) -> Tuple[bool, str]:
+    """
+    Parse LLM intent-review text into (approved, feedback).
+
+    Prefers a final line ``VERDICT: APPROVED`` / ``VERDICT: REJECTED`` so models
+    can explain freely without brittle substring checks.
+    """
+    text = (response or "").strip()
+    if not text:
+        return False, "Empty critic response"
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        m = re.match(r"^VERDICT:\s*(.+)$", ln, re.IGNORECASE)
+        if m:
+            verdict = m.group(1).strip().upper()
+            if verdict.startswith("REJECT"):
+                body = "\n".join(lines[:-1]).strip() or text
+                return False, body
+            if verdict.startswith("APPROVE"):
+                return True, "LLM Approved"
+            break
+
+    head_u = text[:800].upper()
+    if re.search(r"\bNOT\s+APPROVED\b", head_u) or re.search(r"\bCANNOT\s+APPROVE\b", head_u):
+        return False, text
+
+    first = lines[0].upper() if lines else ""
+    if first.startswith("APPROVED"):
+        return True, "LLM Approved"
+    if first.startswith("REJECTED"):
+        rest = text[len(lines[0]) :].lstrip()
+        if rest.startswith(":"):
+            rest = rest[1:].strip()
+        return False, rest or text
+
+    # Legacy models: clear approve without rejection in the header
+    if "APPROVED" in head_u and "REJECTED" not in head_u:
+        return True, "LLM Approved"
+    if "REJECTED" in head_u:
+        return False, re.sub(r"(?i)^rejected:\s*", "", text).strip()
+
+    return False, text
 
 
 class Critic:
@@ -25,6 +72,8 @@ class Critic:
         Args:
             use_llm: Enable LLM-based review (default: True)
         """
+        if os.getenv("FORGECORE_USE_LLM", "true").lower() != "true":
+            use_llm = False
         self.use_llm = use_llm
         self.llm_client: Optional[BaseLLMClient] = None
         
@@ -133,14 +182,15 @@ Check for:
 2. Incomplete implementations or logical errors.
 3. Proper use of CREATE_FILE vs other operations.
 
-Respond with 'APPROVED' or 'REJECTED: [detailed feedback]'.
-If REJECTED, please provide a clear explanation and, if possible, the exact code snippet that should be used instead.
+Write your analysis, then end with EXACTLY one line (machine-readable, no other text after it):
+VERDICT: APPROVED
+or
+VERDICT: REJECTED
+
+If rejecting, put detailed feedback above that line (missing imports, wrong operation choice, etc.).
 """
         response = self.llm_client.generate(prompt)
-        if "APPROVED" in response.upper():
-            return True, "LLM Approved"
-        else:
-            return False, response.replace("REJECTED:", "").strip()
+        return _parse_intent_review_verdict(response)
     
     def _review_result_llm(self, intent: PatchIntent, original: str, modified: str, task: Optional[str] = None) -> Tuple[bool, str]:
         """
